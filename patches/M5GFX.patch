@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ce592b8..2801b77 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,4 +31,6 @@ endif()
+ 
+ message(STATUS "M5GFX use components = ${COMPONENT_REQUIRES}")
+ 
+-register_component()
++idf_component_register(SRCS ${SRCS}
++                       INCLUDE_DIRS ${COMPONENT_ADD_INCLUDEDIRS}
++                       REQUIRES ${COMPONENT_REQUIRES})

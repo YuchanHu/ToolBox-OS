@@ -1,0 +1,25 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ToolBox OS · Wi-Fi</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#080b10;color:#f3f6fc;font:18px system-ui,sans-serif}main{max-width:430px;padding:40px 26px;margin:auto}h1{font-size:30px;margin:30px 0 8px}p{color:#a8b7cb;line-height:1.6}label{display:block;margin:26px 0 10px}input,select,button{font:inherit;width:100%;padding:15px;border-radius:16px;background:#202631;color:inherit;border:1px solid #384354}button{cursor:pointer;margin-top:26px;background:#9dc6ff;color:#081627;border:0}button:disabled{opacity:.5}.check{display:flex;gap:12px;align-items:center;font-size:16px}.check input{width:22px;height:22px}.secondary{background:#202631;color:#bed7f8;margin-top:12px}#status{min-height:52px}</style>
+<main><h1>连接 Wi-Fi</h1><p>ToolBox OS</p><form id="form"><label for="network">选择网络</label><select id="network"><option value="">正在扫描</option></select><label for="ssid">网络名称</label><input id="ssid" required maxlength="32" autocomplete="off"><label for="password">密码</label><input id="password" type="password" maxlength="64" autocomplete="off"><label class="check"><input id="visible" type="checkbox">显示密码</label><button id="connect">保存并连接</button></form><button class="secondary" id="scan">刷新网络</button><button class="secondary" id="exit">退出配网</button><p id="status" role="status" aria-live="polite"></p></main>
+<script>
+const network=document.querySelector('#network'),ssid=document.querySelector('#ssid'),password=document.querySelector('#password'),status=document.querySelector('#status'),connect=document.querySelector('#connect');
+let busy=false,complete=false;
+async function scan(){
+  if(busy||complete)return;
+  try{const response=await fetch('/scan');if(!response.ok)throw Error();const data=await response.json();const selected=ssid.value;network.replaceChildren(new Option('手动输入网络名称',''));for(const ap of data.aps){network.add(new Option(ap.ssid,ap.ssid))}network.value=selected;status.textContent=data.aps.length?'':'正在扫描，请稍后刷新';}
+  catch{status.textContent='扫描失败，请重新刷新';}
+}
+network.addEventListener('change',()=>{ssid.value=network.value});
+document.querySelector('#visible').addEventListener('change',event=>{password.type=event.target.checked?'text':'password'});
+document.querySelector('#scan').addEventListener('click',scan);
+document.querySelector('#exit').addEventListener('click',async()=>{if(busy)return;try{const response=await fetch('/exit',{method:'POST'});if(!response.ok)throw Error();complete=true;status.textContent='已退出配网';}catch{status.textContent='退出失败，请在设备上退出';}});
+document.querySelector('#form').addEventListener('submit',async event=>{
+  event.preventDefault();if(busy)return;
+  if(new TextEncoder().encode(ssid.value).length>32){status.textContent='网络名称过长';return;}
+  busy=true;connect.disabled=true;document.querySelector('#exit').disabled=true;status.textContent='正在连接';
+  try{const response=await fetch('/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:ssid.value,password:password.value})});if(!response.ok)throw Error();const result=await response.json();if(!result.success)throw Error();status.textContent='连接成功，正在退出配网';const exit=await fetch('/exit',{method:'POST'});if(!exit.ok)throw Error();complete=true;password.value='';status.textContent='连接成功，可关闭此页面';}
+  catch{status.textContent='连接失败，请检查密码或在设备上确认网络状态';}
+  finally{busy=false;connect.disabled=false;document.querySelector('#exit').disabled=false;}
+});
+scan();setTimeout(scan,4000);
+</script></html>

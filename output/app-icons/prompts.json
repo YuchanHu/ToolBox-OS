@@ -1,0 +1,49 @@
+{
+  "method": "Built-in image_gen",
+  "target_size": [
+    150,
+    150
+  ],
+  "icons": [
+    {
+      "name": "stopwatch",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-ef088a09-7914-4219-870a-0839a097ec5e.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a bright emerald green circular stopwatch, translucent rim, small rounded silver top push button, single diagonal luminous hand. Close style correspondence to the reference's first icon."
+    },
+    {
+      "name": "settings",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-b9dcb1ef-9eb6-487e-8d04-1f1d021ed059.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject an icy cyan and silver eight-tooth glass gear, cyan glowing circular hub, clean symmetrical silhouette. Close style correspondence to the reference's second icon."
+    },
+    {
+      "name": "camera",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-018aec38-d8df-42b5-8487-697c04d25935.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a violet-blue translucent compact camera with rounded body, small raised viewfinder hump and a large luminous cyan circular glass lens, one small shutter button."
+    },
+    {
+      "name": "counter",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-3b76eaf4-6b3a-4659-9f7b-6a60dca2b730.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject an amber orange translucent hand tally counter with rounded rectangular body, one small top plunger, inset dark display containing three simple glowing vertical tally marks, no numerals."
+    },
+    {
+      "name": "timers",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-45226a40-1e90-49d6-9986-e00fae40fa94.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a warm coral orange translucent hourglass, two rounded glass chambers, luminous sand narrowing through a central neck, simple glass top and base."
+    },
+    {
+      "name": "focus",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-83d14bfc-db32-4e9e-8aac-964fc71a551c.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a raspberry pink translucent ripe tomato for Pomodoro focus, rounded softly lobed glass body, tiny luminous mint green leaf crown, restrained warm central glow."
+    },
+    {
+      "name": "level",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-f8bda625-228c-4688-bdb0-ac047840cda7.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a lime green translucent horizontal spirit level with rounded rectangular glass body, one clear central capsule containing a luminous centered air bubble and two fine white vertical alignment marks."
+    },
+    {
+      "name": "weather",
+      "source": "C:\\Users\\Yuchan\\.codex\\generated_images\\01a1e9c5-9d4f-7c82-8690-9143ca66b305\\exec-2765325f-7a2d-43fd-b208-ec85c64af9e9.png",
+      "prompt": "Create one polished launcher app icon matching the supplied original M5 StopWatch firmware reference image. Reference is style guidance only. Single centered luminous translucent glass object on pure black #000000 square background, rich saturated luminous color, restrained soft bloom, fine white edge highlights, gently beveled glass volume, frontal view, simple strong silhouette. Match the compact original icons' proportions and soft material. Artwork occupies about 75% of square, glow fits completely inside, generous black edge. Native intended display is exactly 150 x 150 pixels on AMOLED, so keep forms legible at this small size. Deliver a single square icon, ideally exactly 150x150 pixels. No words, lettering, watermark, app label, frame or presentation board. Subject a warm golden glowing glass sun partially behind a luminous ice-blue rounded translucent cloud, compact balanced silhouette, sun rays short and rounded."
+    }
+  ]
+}

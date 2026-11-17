@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>ToolBoxOS 交互预览</title>
+<style>
+@font-face{font-family:MiSans;src:url('../../reference/MiSans/ttf/MiSans-Regular.ttf')}
+*{box-sizing:border-box}body{margin:32px;background:#101216;color:#f3f6fc;font-family:MiSans,sans-serif}h1{font-size:26px}p{color:#98a4b7}.grid{display:flex;flex-wrap:wrap;gap:28px}h2{font-size:22px;font-weight:400}.watch{width:466px;height:466px;border-radius:50%;overflow:hidden;position:relative;background:black;touch-action:manipulation}.watch img,.watch canvas{position:absolute;inset:0;width:466px;height:466px}.controls{opacity:0;transition:opacity 300ms ease;pointer-events:none}.watch.revealed .controls{opacity:1}button,select{background:#202631;color:#f3f6fc;border:0;border-radius:18px;padding:12px 18px;font:inherit;margin:8px 6px 8px 0}button:focus-visible{outline:2px solid #9dc6ff}.weatherText{position:absolute;inset:0;text-align:center;text-shadow:0 2px 8px #0008;pointer-events:none}.weatherText span{position:absolute;left:0;width:100%}.city{top:62px;font-size:26px}.date{top:125px;font-size:20px}.temp{top:170px;font-size:65px}.condition{top:261px;font-size:28px}.range{top:316px;font-size:20px}.rain{top:351px;font-size:20px}.links a{color:#9dc6ff;margin-right:20px}
+</style>
+<h1>ToolBoxOS · 更新交互预览</h1>
+<p>点击水平仪、番茄钟或倒计时唤出控件，2 秒后开始淡出。再次点击重新计时。天气选择器用于审阅动画，数值为占位。</p>
+<div class="grid">
+<section><h2>Level</h2><div class="watch" id="level" tabindex="0" role="button" aria-label="显示水平仪控件"><img src="level-live-idle.png"><img class="controls" src="level-live.png"></div></section>
+<section><h2>Focus</h2><div class="watch" id="focus" tabindex="0" role="button" aria-label="显示番茄钟控件"><img src="focus-run-idle.png"><img class="controls" src="focus-run.png"></div></section>
+<section><h2>Timers</h2><div class="watch" id="timers" tabindex="0" role="button" aria-label="显示倒计时控件"><img src="timers-run-idle.png"><img class="controls" src="timers-run.png"></div></section>
+<section><h2>Weather</h2><div class="watch" id="weather"><canvas width="466" height="466"></canvas><div class="weatherText"><span class="city">城市</span><span class="date">今日</span><span class="temp">--°</span><span class="condition">晴</span><span class="range">最高 --°　最低 --°</span><span class="rain">降水概率 --%</span></div></div><label>天气动画 <select id="weatherKind"></select></label><label><input id="night" type="checkbox">夜间</label></section>
+<section><h2>Counter</h2><div class="watch" id="counter"><img src="counter-main.png"></div></section>
+</div><p class="links"><a href="Level.png">Level 全部状态</a><a href="Focus.png">Focus 全部状态</a><a href="Timers.png">Timers 全部状态</a><a href="counter-confirm.png">计数器重置确认</a></p>
+<script>
+for(const watch of document.querySelectorAll('[role=button]')){
+ let timeout;
+ function reveal(){clearTimeout(timeout);watch.classList.add('revealed');timeout=setTimeout(()=>watch.classList.remove('revealed'),2000);}
+ watch.addEventListener('click',reveal);
+ watch.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();reveal();}});
+}
+const kinds=[['clear','晴'],['partly','晴间多云'],['cloud','多云'],['overcast','阴'],['fog','雾'],['drizzle','毛毛雨'],['rain','雨'],['heavy','大雨'],['freezing','冻雨'],['snow','雪'],['sleet','雨夹雪'],['storm','雷雨'],['hail','雷雨伴冰雹']];
+const select=document.querySelector('select');
+for(const [value,label] of kinds){const option=document.createElement('option');option.value=value;option.textContent=label;select.append(option);}
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+const particles=Array.from({length:56},(_,i)=>({x:(i*137.51)%466,y:(i*83.17)%580,speed:65+(i%9)*17,r:1+i%3}));
+let kind='clear',night=false;
+select.onchange=()=>{kind=select.value;document.querySelector('.condition').textContent=select.selectedOptions[0].text;};
+document.querySelector('#night').onchange=event=>night=event.target.checked;
+function cloud(x,y,alpha){ctx.fillStyle=`rgba(175,194,214,${alpha})`;ctx.beginPath();ctx.ellipse(x,y,125,31,0,0,Math.PI*2);ctx.ellipse(x-43,y-12,60,36,0,0,Math.PI*2);ctx.ellipse(x+31,y-18,70,42,0,0,Math.PI*2);ctx.fill();}
+function draw(t){
+ const wet=['drizzle','rain','heavy','freezing','sleet','storm','hail'].includes(kind);
+ const clear=kind==='clear'||kind==='partly';
+ const sky=ctx.createLinearGradient(0,0,0,466);sky.addColorStop(0,night?'#070f26':clear?'#145b92':'#273d52');sky.addColorStop(1,night?'#152943':clear?'#558eae':'#111b29');ctx.fillStyle=sky;ctx.fillRect(0,0,466,466);
+ if(clear){
+  if(night){for(const p of particles.slice(0,28)){ctx.fillStyle=`rgba(220,232,255,${.35+.25*Math.sin(t+p.x)})`;ctx.fillRect(p.x,p.y%300,p.r/2,p.r/2);}}
+  const glow=ctx.createRadialGradient(330,99,10,330,99,170+7*Math.sin(t*.6));glow.addColorStop(0,night?'#dce9ffbb':'#ffe9adaa');glow.addColorStop(1,'#ffffff00');ctx.fillStyle=glow;ctx.fillRect(0,0,466,300);
+  ctx.fillStyle=night?'#e3edff':'#fff2c2';ctx.beginPath();ctx.arc(330,99,night?22:28,0,Math.PI*2);ctx.fill();
+ }
+ if(kind!=='clear')for(let i=0;i<5;i++)cloud(((i*143+t*(4+i))%760)-150,55+i*44,night?.06:.11);
+ if(wet||kind==='snow')for(const [i,p] of particles.entries()){
+  const snow=kind==='snow'||kind==='sleet'&&i%2===0;
+  const y=(p.y+t*(snow?p.speed*.22:p.speed*1.5))%580-60;
+  const x=(p.x+(snow?Math.sin(t*.7+i)*13:-t*20)%466+466)%466;
+  ctx.strokeStyle='#c4e5ff88';ctx.fillStyle='#e6f2ffb0';ctx.lineWidth=kind==='heavy'?2:1;
+  if(snow||kind==='hail'){ctx.beginPath();ctx.arc(x,y,snow?p.r:2,0,Math.PI*2);ctx.fill();}
+  else {ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x-4,y+(kind==='drizzle'?8:20));ctx.stroke();}
+ }
+ if(kind==='fog')for(let i=0;i<7;i++)cloud(190+Math.sin(t*.12+i)*90,90+i*54,.12);
+ if((kind==='storm'||kind==='hail')&&t%9<.15){ctx.fillStyle='#bdcfff40';ctx.fillRect(0,0,466,466);ctx.strokeStyle='#dce8ff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(343,48);ctx.lineTo(320,91);ctx.lineTo(341,88);ctx.lineTo(313,134);ctx.stroke();}
+ const shade=ctx.createRadialGradient(233,255,40,233,255,240);shade.addColorStop(0,'#00000025');shade.addColorStop(1,'#00000000');ctx.fillStyle=shade;ctx.fillRect(0,0,466,466);
+}
+// Single bounded canvas, absolute timestamps, no accumulating particle state.
+window.drawWeather=draw;
+let frame;
+function animate(now){draw(now/1000);frame=requestAnimationFrame(animate);}
+function visibility(){cancelAnimationFrame(frame);if(!document.hidden)frame=requestAnimationFrame(animate);}
+document.addEventListener('visibilitychange',visibility);visibility();
+</script></html>
