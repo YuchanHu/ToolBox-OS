@@ -5,6 +5,7 @@
 #include "runtime.h"
 #include <src/misc/cache/instance/lv_image_cache.h>
 #include <hal/hal.h>
+#include <hal/refresh_metrics.h>
 #include <hal/utils/settings/settings.h>
 #include <algorithm>
 #include <array>
@@ -40,6 +41,7 @@ uint32_t clock_shown_at = 0;
 bool overlay_closing = false;
 std::array<std::array<lv_point_precise_t, 2>, 60> tick_points;
 void render_page(Page target);
+void update_time();
 lv_obj_t *ble_status = nullptr;
 bool pending_ble = false, desired_ble = false;
 bool pending_provision = false, desired_provision = false;
@@ -49,6 +51,10 @@ std::array<std::array<lv_point_precise_t, 2>, 3> hand_points;
 bool locked = true, analog = false, settling = false;
 int overlay_level = 0;
 int unlock_progress = 0;
+int rendered_progress = -1;
+bool lock_snapshot_dirty = true;
+bool drawer_snapshot_dirty = false;
+std::array<int, 3> hand_steps{-1, -1, -1};
 uint32_t last_second = UINT32_MAX;
 bool was_pressed = false, captured = false, unlock_dragging = false;
 int start_x, start_y, last_x, last_y;
@@ -77,6 +83,7 @@ void set_analog(bool enabled)
     lv_obj_set_flag(date_label, LV_OBJ_FLAG_HIDDEN, analog);
     lv_obj_set_flag(lock_status_row, LV_OBJ_FLAG_HIDDEN, analog);
     last_second = UINT32_MAX;
+    lock_snapshot_dirty = true;
 }
 
 void overlay_position(void* object, int32_t value)
@@ -98,6 +105,7 @@ void show_overlay(int level)
         return;
     }
     overlay_level = level;
+    last_second = UINT32_MAX;
     lv_obj_set_style_bg_opa(overlay, level == 1 ? 85 : LV_OPA_TRANSP, 0);
     lv_anim_delete(clock_panel, overlay_position);
     lv_anim_delete(controls, overlay_position);
@@ -118,6 +126,7 @@ void show_overlay(int level)
     lv_anim_set_completed_cb(&animation, overlay_hidden);
     lv_anim_start(&animation);
     lv_obj_move_foreground(overlay);
+    if (level) update_time();
     if (GetHAL().lvTouchpad) lv_indev_reset(GetHAL().lvTouchpad, nullptr);
 }
 
@@ -125,36 +134,51 @@ void release_unlock_images()
 {
     if (unlock_lock_image) lv_obj_delete(unlock_lock_image);
     if (unlock_drawer_image) lv_obj_delete(unlock_drawer_image);
-    if (unlock_lock_pixels) {
-        lv_image_cache_drop(unlock_lock_pixels);
-        lv_draw_buf_destroy(unlock_lock_pixels);
-    }
-    if (unlock_drawer_pixels) {
-        lv_image_cache_drop(unlock_drawer_pixels);
-        lv_draw_buf_destroy(unlock_drawer_pixels);
-    }
     unlock_lock_image = unlock_drawer_image = nullptr;
-    unlock_lock_pixels = unlock_drawer_pixels = nullptr;
 }
 
-bool prepare_unlock_images()
+void destroy_snapshot(lv_draw_buf_t*& pixels)
 {
-    // Snapshot each page once per gesture. Scaling images directly avoids
-    // rebuilding two full-screen transformed object layers on every frame.
-    for (auto* root : {drawer, lockscreen}) {
-        lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_y(root, 0);
+    if (!pixels) return;
+    lv_image_cache_drop(pixels);
+    lv_draw_buf_destroy(pixels);
+    pixels = nullptr;
+}
+
+void refresh_snapshot(lv_obj_t* root, lv_draw_buf_t*& pixels)
+{
+    const auto start = perf::now();
+    const bool hidden = lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN);
+    const int y = lv_obj_get_style_y(root, LV_PART_MAIN);
+    const int scale = lv_obj_get_style_transform_scale_x(root, LV_PART_MAIN);
+    const auto opa = lv_obj_get_style_opa(root, LV_PART_MAIN);
+    // Ignore the cached page's transition styles while capturing.
+    if (y) lv_obj_set_y(root, 0);
+    if (scale != 256) {
         lv_obj_set_style_transform_scale_x(root, 256, 0);
         lv_obj_set_style_transform_scale_y(root, 256, 0);
-        lv_obj_set_style_opa(root, LV_OPA_COVER, 0);
-        lv_obj_update_layout(root);
     }
-    unlock_drawer_pixels = lv_snapshot_take(drawer, LV_COLOR_FORMAT_RGB565);
-    unlock_lock_pixels = lv_snapshot_take(lockscreen, LV_COLOR_FORMAT_RGB565);
-    if (!unlock_drawer_pixels || !unlock_lock_pixels) {
-        release_unlock_images();
-        return false;
+    if (opa != LV_OPA_COVER) lv_obj_set_style_opa(root, LV_OPA_COVER, 0);
+    if (hidden) lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
+    if (pixels) {
+        lv_image_cache_drop(pixels);
+        if (lv_snapshot_take_to_draw_buf(root, LV_COLOR_FORMAT_RGB565, pixels) != LV_RESULT_OK)
+            destroy_snapshot(pixels);
     }
+    if (!pixels) pixels = lv_snapshot_take(root, LV_COLOR_FORMAT_RGB565);
+    if (hidden) lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
+    if (y) lv_obj_set_y(root, y);
+    if (scale != 256) {
+        lv_obj_set_style_transform_scale_x(root, scale, 0);
+        lv_obj_set_style_transform_scale_y(root, scale, 0);
+    }
+    if (opa != LV_OPA_COVER) lv_obj_set_style_opa(root, opa, 0);
+    perf::sample(perf::snapshot_time, perf::now() - start);
+}
+
+bool show_unlock_images()
+{
+    if (!unlock_drawer_pixels || !unlock_lock_pixels) return false;
     unlock_drawer_image = lv_image_create(lv_screen_active());
     lv_image_set_src(unlock_drawer_image, unlock_drawer_pixels);
     lv_obj_set_x(unlock_drawer_image, lv_obj_get_x(drawer));
@@ -171,7 +195,9 @@ void unlock_frame(void*, int32_t value)
 {
     unlock_progress = value;
     if (!lockscreen || !drawer) return;
-    if (value > 0 && value < 220 && (unlock_lock_image || prepare_unlock_images())) {
+    if (rendered_progress == value) return;
+    rendered_progress = value;
+    if (value > 0 && value < 220 && (unlock_lock_image || show_unlock_images())) {
         lv_obj_set_y(unlock_lock_image, -200 * value / 220);
         lv_image_set_scale(unlock_lock_image, 256 - 40 * value / 220);
         lv_obj_set_style_image_opa(unlock_lock_image, 255 - 255 * value / 220, 0);
@@ -270,38 +296,53 @@ void update_time()
     std::tm tm = {};
     localtime_r(&now, &tm);
     const int battery = GetHAL().getBatteryLevel();
-    ui::battery_level(clock_battery_icon, battery, 0xc3ddff);
-    ui::battery_level(control_battery_icon, battery);
     const bool charging = GetHAL().isBatteryCharging(true);
-    lv_obj_set_flag(clock_charge, LV_OBJ_FLAG_HIDDEN, !charging);
-    lv_obj_set_flag(control_charge, LV_OBJ_FLAG_HIDDEN, !charging);
-    lv_label_set_text_fmt(clock_time, "%02d:%02d", tm.tm_hour, tm.tm_min);
-    lv_label_set_text_fmt(clock_battery, "%d%%", battery);
-    lv_label_set_text_fmt(control_battery, "%d%%", battery);
-    lv_label_set_text_fmt(control_time, "%02d:%02d", tm.tm_hour, tm.tm_min);
-    if (!lockscreen) return;
-    ui::battery_level(lock_battery, battery, 0xb9c7db);
-    lv_obj_set_flag(lock_charge, LV_OBJ_FLAG_HIDDEN, !charging);
+    if (overlay_level) {
+        const bool clock = overlay_level == 1;
+        ui::battery_level(clock ? clock_battery_icon : control_battery_icon, battery, clock ? 0xc3ddff : 0xf3f6fc);
+        lv_obj_set_flag(clock ? clock_charge : control_charge, LV_OBJ_FLAG_HIDDEN, !charging);
+        ui::set_text_fmt(clock ? clock_time : control_time, "%02d:%02d", tm.tm_hour, tm.tm_min);
+        ui::set_text_fmt(clock ? clock_battery : control_battery, "%d%%", battery);
+    }
+    if (!lockscreen || !locked || settling || was_pressed || page != Page::None || overlay_level == 2) return;
+    auto redraw_if_changed = [](bool changed) { lock_snapshot_dirty |= changed; };
+    if (lv_obj_has_flag(lock_charge, LV_OBJ_FLAG_HIDDEN) == charging) {
+        lv_obj_set_flag(lock_charge, LV_OBJ_FLAG_HIDDEN, !charging);
+        lock_snapshot_dirty = true;
+    }
     const char* weekdays[] = {"日", "一", "二", "三", "四", "五", "六"};
-    lv_label_set_text_fmt(dial_day, "周%s", weekdays[tm.tm_wday]);
-    lv_label_set_text_fmt(dial_date, "%d", tm.tm_mday);
-    lv_arc_set_value(battery_arc, battery);
-    lv_label_set_text_fmt(dial_battery, "%d", battery);
-    lv_obj_align_to(dial_battery, battery_arc, LV_ALIGN_CENTER, 0, 0);
-    lv_label_set_text_fmt(digital, "%02d:%02d", tm.tm_hour, tm.tm_min);
-    lv_label_set_text_fmt(date_label, "%d月%d日 · 星期%s", tm.tm_mon + 1, tm.tm_mday, weekdays[tm.tm_wday]);
-    lv_label_set_text_fmt(status, "%d%%", battery);
-    lv_obj_set_style_opa(lock_wifi, GetHAL().getWifiStatus().connected ? LV_OPA_COVER : LV_OPA_30, 0);
-    const double angles[] = {(tm.tm_hour % 12 + tm.tm_min / 60.0) * 30,
-                              (tm.tm_min + tm.tm_sec / 60.0) * 6.0, tm.tm_sec * 6.0};
+    if (!analog) {
+        ui::battery_level(lock_battery, battery, 0xb9c7db);
+        redraw_if_changed(ui::set_text_fmt(digital, "%02d:%02d", tm.tm_hour, tm.tm_min));
+        redraw_if_changed(ui::set_text_fmt(date_label, "%d月%d日 · 星期%s", tm.tm_mon + 1, tm.tm_mday, weekdays[tm.tm_wday]));
+        redraw_if_changed(ui::set_text_fmt(status, "%d%%", battery));
+        const auto opa = GetHAL().getWifiStatus().connected ? LV_OPA_COVER : LV_OPA_30;
+        if (lv_obj_get_style_opa(lock_wifi, LV_PART_MAIN) != opa) {
+            lv_obj_set_style_opa(lock_wifi, opa, 0);
+            lock_snapshot_dirty = true;
+        }
+        return;
+    }
+    redraw_if_changed(ui::set_text_fmt(dial_day, "周%s", weekdays[tm.tm_wday]));
+    redraw_if_changed(ui::set_text_fmt(dial_date, "%d", tm.tm_mday));
+    if (lv_arc_get_value(battery_arc) != battery) lv_arc_set_value(battery_arc, battery);
+    if (ui::set_text_fmt(dial_battery, "%d", battery)) {
+        lv_obj_align_to(dial_battery, battery_arc, LV_ALIGN_CENTER, 0, 0);
+        lock_snapshot_dirty = true;
+    }
+    const int steps[] = {(tm.tm_hour % 12) * 60 + tm.tm_min, tm.tm_min * 60 + tm.tm_sec, tm.tm_sec};
+    const double degrees_per_step[] = {.5, .1, 6};
     const int lengths[] = {102, 148, 187};
     for (int i = 0; i < 3; ++i) {
-        const double angle = angles[i] * 3.141592653589793 / 180;
+        if (hand_steps[i] == steps[i]) continue;
+        hand_steps[i] = steps[i];
+        const double angle = steps[i] * degrees_per_step[i] * 3.141592653589793 / 180;
         const int tail = i == 2 ? 30 : 13;
         hand_points[i][0] = {static_cast<lv_value_precise_t>(233 - tail * std::sin(angle)), static_cast<lv_value_precise_t>(233 + tail * std::cos(angle))};
         hand_points[i][1] = {static_cast<lv_value_precise_t>(233 + lengths[i] * std::sin(angle)),
                              static_cast<lv_value_precise_t>(233 - lengths[i] * std::cos(angle))};
         lv_line_set_points(hands[i], hand_points[i].data(), 2);
+        lock_snapshot_dirty = true;
     }
 }
 
@@ -309,6 +350,7 @@ void tick(lv_timer_t*)
 {
     if (lockscreen && locked && !settling && !was_pressed && lv_tick_elaps(shift_tick) >= 300000) {
         shift_tick = lv_tick_get();
+        lock_snapshot_dirty = true;
         lv_obj_set_style_translate_x(lockscreen, static_cast<int>(lv_rand(0, 8)) - 4, 0);
         lv_obj_set_style_translate_y(lockscreen, static_cast<int>(lv_rand(0, 8)) - 4, 0);
     }
@@ -323,15 +365,22 @@ void tick(lv_timer_t*)
     if (pending_provision && runtime().post({CommandType::Provision, desired_provision, true})) pending_provision = false;
     if (pending_face && runtime().post({CommandType::Face, analog, true})) pending_face = false;
     if (pending_wifi && runtime().post({CommandType::Wifi, desired_wifi, true})) pending_wifi = false;
+    if (drawer_snapshot_dirty && locked && !was_pressed && !settling && page == Page::None && overlay_level < 2) {
+        refresh_snapshot(drawer, unlock_drawer_pixels);
+        drawer_snapshot_dirty = false;
+    }
     auto second = lv_tick_get() / 1000;
     if (second == last_second) return;
     last_second = second;
     update_time();
+    if (lockscreen && locked && !settling && !was_pressed && page == Page::None &&
+        overlay_level < 2 && lock_snapshot_dirty) {
+        refresh_snapshot(lockscreen, unlock_lock_pixels);
+        lock_snapshot_dirty = false;
+    }
     const bool ble_on = ble_enabled();
-    lv_obj_set_style_bg_color(ble_button, lv_color_hex(ble_on ? accent : 0x202631), 0);
-    auto* ble_content = lv_obj_get_child(ble_button, 1);
-    lv_obj_set_style_text_color(lv_obj_get_child(ble_content, 1), lv_color_hex(ble_on ? 0x081627 : 0xf3f6fc), 0);
-    if (ble_status) lv_label_set_text(ble_status, ble_error() == ESP_ERR_NO_MEM ? "内部内存不足" : ble_error() != ESP_OK ? "BLE 开启失败" : ble_on ? "BLE 已开启" : "BLE 已关闭");
+
+    if (ble_status) ui::set_text(ble_status, ble_error() == ESP_ERR_NO_MEM ? "内部内存不足" : ble_error() != ESP_OK ? "BLE 开启失败" : ble_on ? "BLE 已开启" : "BLE 已关闭");
     auto network = GetHAL().getWifiStatus();
     if (network.configMode && !provisioning_visible) {
         show_overlay(0);
@@ -342,26 +391,40 @@ void tick(lv_timer_t*)
     if (page == Page::Wifi || page == Page::Ap) {
         if (page == Page::Ap && !network.configMode) render_page(Page::Wifi);
         if (page == Page::Ap) {
-            lv_label_set_text(network_name, network.apSsid.c_str());
-            lv_label_set_text(network_text, network.apUrl.c_str());
+            ui::set_text(network_name, network.apSsid.c_str());
+            ui::set_text(network_text, network.apUrl.c_str());
         } else {
             const char* state = network.connected ? "已连接" : network.mode == Hal::WifiMode::Error ? "连接失败" : network.enabled ? "正在连接" : "Wi-Fi 已关闭";
-            lv_label_set_text(network_name, network.ssid.c_str());
-            lv_label_set_text_fmt(network_text, "%s\n%s", state, network.ipAddress.c_str());
+            ui::set_text(network_name, network.ssid.c_str());
+            ui::set_text_fmt(network_text, "%s\n%s", state, network.ipAddress.c_str());
             lv_obj_set_state(wifi_switch, LV_STATE_CHECKED, network.enabled);
         }
     }
-    if (!pending_brightness && lv_indev_get_state(GetHAL().lvTouchpad) == LV_INDEV_STATE_RELEASED)
-        lv_slider_set_value(brightness, GetHAL().getBackLightBrightness(), LV_ANIM_OFF);
-    if (!pending_volume && lv_indev_get_state(GetHAL().lvTouchpad) == LV_INDEV_STATE_RELEASED)
-        lv_slider_set_value(volume, GetHAL().getSpeakerVolume(), LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(wifi_button, lv_color_hex(GetHAL().isWifiEnabled() ? accent : 0x202631), 0);
-    lv_obj_set_style_image_recolor(lv_obj_get_child(lv_obj_get_child(wifi_button, 1), 0), lv_color_hex(GetHAL().isWifiEnabled() ? 0x081627 : 0xf3f6fc), 0);
-    lv_obj_set_style_image_recolor(lv_obj_get_child(ble_content, 0), lv_color_hex(ble_on ? 0x081627 : 0xf3f6fc), 0);
-    lv_label_set_text_fmt(brightness_value, "%d", GetHAL().getBackLightBrightness());
-    lv_label_set_text_fmt(volume_value, "%d", GetHAL().getSpeakerVolume());
-    lv_obj_set_style_text_color(lv_obj_get_child(lv_obj_get_child(wifi_button, 1), 1),
-        lv_color_hex(GetHAL().isWifiEnabled() ? 0x081627 : 0xf3f6fc), 0);
+    if (overlay_level != 2) return;
+    for (auto* tile : {wifi_button, ble_button}) {
+        const bool on = tile == wifi_button ? GetHAL().isWifiEnabled() : ble_on;
+        const auto bg = lv_color_hex(on ? accent : 0x202631);
+        auto* content = lv_obj_get_child(tile, 1);
+        const auto fg = lv_color_hex(on ? 0x081627 : 0xf3f6fc);
+        auto* caption = lv_obj_get_child(content, 1);
+        if (!lv_color_eq(lv_obj_get_style_bg_color(tile, LV_PART_MAIN), bg)) lv_obj_set_style_bg_color(tile, bg, 0);
+        if (!lv_color_eq(lv_obj_get_style_text_color(caption, LV_PART_MAIN), fg)) {
+            lv_obj_set_style_text_color(caption, fg, 0);
+            lv_obj_set_style_image_recolor(lv_obj_get_child(content, 0), fg, 0);
+        }
+    }
+    if (lv_indev_get_state(GetHAL().lvTouchpad) == LV_INDEV_STATE_RELEASED) {
+        if (!pending_brightness) {
+            const int value = GetHAL().getBackLightBrightness();
+            if (lv_slider_get_value(brightness) != value) lv_slider_set_value(brightness, value, LV_ANIM_OFF);
+            ui::set_text_fmt(brightness_value, "%d", value);
+        }
+        if (!pending_volume) {
+            const int value = GetHAL().getSpeakerVolume();
+            if (lv_slider_get_value(volume) != value) lv_slider_set_value(volume, value, LV_ANIM_OFF);
+            ui::set_text_fmt(volume_value, "%d", value);
+        }
+    }
 }
 
 void slider_event(lv_event_t* event)
@@ -628,6 +691,7 @@ void shell_open_settings(std::function<void()> on_close)
 void shell_close_settings()
 {
     page = Page::None;
+    last_second = UINT32_MAX;
     network_text = ble_status = wifi_switch = nullptr;
     lv_obj_add_flag(settings, LV_OBJ_FLAG_HIDDEN);
     auto callback = std::move(settings_closed);
@@ -642,13 +706,24 @@ void shell_lock()
     lv_anim_delete(&unlock_progress, unlock_frame);
     settling = false;
     locked = true;
+    const bool changed = rendered_progress != 0;
     lv_obj_remove_flag(lockscreen, LV_OBJ_FLAG_HIDDEN);
     unlock_frame(nullptr, 0);
+    if (changed) {
+        update_time();
+        refresh_snapshot(drawer, unlock_drawer_pixels);
+        drawer_snapshot_dirty = false;
+        refresh_snapshot(lockscreen, unlock_lock_pixels);
+        lock_snapshot_dirty = false;
+    }
 }
 
 void shell_attach(lv_obj_t* root)
 {
     drawer = root;
+    drawer_snapshot_dirty = false;
+    rendered_progress = -1;
+    hand_steps.fill(-1);
     lockscreen = panel(lv_screen_active(), 0, 0, 466, 466, 0);
     digital = text(lockscreen, "", 0, 150, 466, &toolbox_misans_98);
     lv_obj_set_style_text_letter_space(digital, -5, 0);
@@ -668,6 +743,11 @@ void shell_attach(lv_obj_t* root)
     settling = false;
     unlock_frame(nullptr, 0);
     update_time();
+    if (!resume_drawer) {
+        refresh_snapshot(drawer, unlock_drawer_pixels);
+        refresh_snapshot(lockscreen, unlock_lock_pixels);
+        lock_snapshot_dirty = false;
+    }
     if (resume_drawer) {
         locked = false;
         unlock_frame(nullptr, 220);
@@ -679,9 +759,17 @@ void shell_detach()
 {
     lv_anim_delete(&unlock_progress, unlock_frame);
     release_unlock_images();
+    destroy_snapshot(unlock_lock_pixels);
+    destroy_snapshot(unlock_drawer_pixels);
     if (lockscreen) lv_obj_delete(lockscreen);
     lockscreen = drawer = nullptr;
+    drawer_snapshot_dirty = false;
     settling = false;
+}
+
+void shell_drawer_settled(lv_obj_t* root)
+{
+    if (root == drawer && locked) drawer_snapshot_dirty = true;
 }
 
 bool shell_is_locked() { return lockscreen && locked; }

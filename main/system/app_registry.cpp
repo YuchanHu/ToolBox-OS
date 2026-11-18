@@ -4,7 +4,11 @@
 #include <apps/app_setup/app_setup.h>
 #include <apps/app_camera/app_camera.h>
 #include <mooncake.h>
-#include <apps/app_extensions/app_extensions.h>
+#include <apps/app_counter/app_counter.h>
+#include <apps/app_timers/app_timers.h>
+#include <apps/app_focus/app_focus.h>
+#include <apps/app_level/app_level.h>
+#include <apps/app_weather/app_weather.h>
 
 namespace toolbox {
 
@@ -17,8 +21,11 @@ void install_apps()
     apps.installApp(std::make_unique<AppStopWatch>());
     apps.installApp(std::make_unique<AppSetup>());
     apps.installApp(std::make_unique<AppCamera>());
-    for (auto kind : {Extension::Counter, Extension::Timers, Extension::Focus, Extension::Level, Extension::Weather})
-        apps.installApp(std::make_unique<ExtensionApp>(kind));
+    apps.installApp(std::make_unique<AppCounter>());
+    apps.installApp(std::make_unique<AppTimers>());
+    apps.installApp(std::make_unique<AppFocus>());
+    apps.installApp(std::make_unique<AppLevel>());
+    apps.installApp(std::make_unique<AppWeather>());
 }
 
 } // namespace toolbox

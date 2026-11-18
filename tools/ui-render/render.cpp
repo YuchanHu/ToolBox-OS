@@ -2,6 +2,7 @@
 #include <system/touch_input.h>
 #include <system/runtime.h>
 #include <system/ble.h>
+#include <system/app_icons.h>
 #include <system/stopwatch_ui.h>
 #include <apps/app_launcher/view/view.h>
 #include <apps/app_stopwatch/app_stopwatch.h>
@@ -54,6 +55,7 @@ void trigger(Mode mode) {
 std::vector<uint32_t> framebuffer(468 * 466);
 std::vector<uint16_t> draw_buffer(468 * 466), second_draw_buffer(468 * 466);
 bool full_render = false;
+std::filesystem::path capture_dir;
 toolbox::TouchHistory input_history;
 
 void advance(unsigned milliseconds)
@@ -68,12 +70,18 @@ void advance(unsigned milliseconds)
 void screenshot(const char* name)
 {
     lv_refr_now(nullptr);
-    std::ofstream output(std::string("build-ui-render/images/") + name + ".bgra", std::ios::binary);
+    std::ofstream output(capture_dir / (std::string(name) + ".bgra"), std::ios::binary);
     output.write(reinterpret_cast<char*>(framebuffer.data()), framebuffer.size() * 4);
+    if (!output) throw std::runtime_error("Could not save LVGL capture");
 }
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void check_display_transfer()
 {
+    toolbox::display::FrameRegions regions;
+    regions.add({0, 0, 9, 1});
+    regions.add({10, 0, 19, 1});
+    regions.add({300, 350, 309, 351});
+    require(regions.count == 2, "Adjacent windows should merge and distant windows should stay separate");
     constexpr int width = 468, height = 466;
     for (int stride : {width * 2, width * 2 + 16}) {
         std::vector<uint8_t> frame(stride * height, 0xa5);
@@ -158,10 +166,60 @@ void click_text(const char* value)
     advance(40);
 }
 void check_extensions();
+void check_drawer(int count)
+{
+    std::vector<mooncake::AppProps_t> apps(count);
+    const int first_id = 100 * count;
+    for (int i = 0; i < count; ++i) {
+        apps[i].appID = first_id + i;
+        apps[i].info.name = "drawer app " + std::to_string(i);
+    }
+    view::LauncherView view;
+    view.init(std::move(apps));
+    lv_obj_t* scroll = nullptr;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(view.root()); ++i) {
+        auto* child = lv_obj_get_child(view.root(), i);
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_SCROLLABLE) && lv_obj_get_scroll_dir(child) == LV_DIR_HOR)
+            scroll = child;
+    }
+    require(scroll && lv_obj_get_child_count(scroll) == 6, "Drawer must have five reusable cards and one scroll bound");
+    const int start = lv_obj_get_scroll_x(scroll);
+    lv_obj_scroll_to_x(scroll, start - 466, LV_ANIM_OFF);
+    lv_obj_update_layout(scroll);
+    const auto last = "drawer app " + std::to_string(count - 1);
+    require(find_text(view.root(), last.c_str()), "Going left from the first card must wrap");
+    for (int page = 0; page < 80; ++page) {
+        lv_obj_scroll_to_x(scroll, lv_obj_get_scroll_x(scroll) + 466, LV_ANIM_OFF);
+        view.update();
+        lv_obj_update_layout(scroll);
+        const auto expected = "drawer app " + std::to_string(page % count);
+        require(find_text(view.root(), expected.c_str()), "Rebase must preserve the selected app");
+        require(lv_obj_get_child_count(scroll) == 6, "Card recycling must keep the object count bounded");
+    }
+    int clicked = -1;
+    view.onAppClicked = [&](int id) { clicked = id; };
+    const uint32_t at = lv_tick_get();
+    input_history.push({true, 233, 232, at});
+    input_history.push({false, 233, 232, at + 20});
+    advance(40);
+    view.update();
+    require(clicked == first_id + 79 % count, "Reused card must open the selected app");
+
+    for (int step = 0; step <= 8; ++step) {
+        input_history.push({true, static_cast<int16_t>(380 - 36 * step), 232, lv_tick_get()});
+        advance(12);
+    }
+    input_history.push({false, 92, 232, lv_tick_get()});
+    advance(600);
+    view.update();
+    require(lv_obj_get_scroll_x(scroll) % 466 == 0 && find_text(view.root(), "drawer app 0"),
+        "A horizontal swipe must settle on the next centered app");
+}
+
 int render_all()
 {
     check_display_transfer();
-    std::filesystem::create_directories("build-ui-render/images");
+    std::filesystem::create_directories(capture_dir);
     lv_init();
     auto* display = lv_display_create(468, 466);
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565_SWAPPED);
@@ -199,8 +257,15 @@ int render_all()
     lv_obj_delete(boot);
     toolbox::shell_init();
     view::LauncherView drawer;
-    std::vector<mooncake::AppProps_t> apps(3);
-    apps[0].info.name = "秒表"; apps[1].info.name = "设置"; apps[2].info.name = "相机遥控";
+    const char* names[] = {"秒表", "设置", "相机遥控", "计数器", "倒计时", "番茄钟", "水平仪", "天气"};
+    const lv_image_dsc_t* icons[] = {&toolbox_app_stopwatch, &toolbox_app_settings, &toolbox_app_camera,
+        &toolbox_app_counter, &toolbox_app_timers, &toolbox_app_focus, &toolbox_app_level, &toolbox_app_weather};
+    std::vector<mooncake::AppProps_t> apps(std::size(names));
+    for (size_t i = 0; i < apps.size(); ++i) {
+        apps[i].appID = static_cast<int>(i);
+        apps[i].info.name = names[i];
+        apps[i].info.icon = const_cast<lv_image_dsc_t*>(icons[i]);
+    }
     drawer.init(apps);
     toolbox::shell_attach(drawer.root());
     advance(40);
@@ -326,9 +391,11 @@ int render_all()
     input_history.push({true, 233, 180, captured_at});
     for (int sample = 1; sample < 80; ++sample)
         input_history.push({true, 233, static_cast<int16_t>(180 + sample % 20), captured_at + sample * 4});
+    require(input_history.size() <= 4 && !input_history.overflows(), "Moves must coalesce without losing gesture edges");
+    input_history.cancel(captured_at + 316);
     input_history.push({false, 233, 180, captured_at + 320});
     advance(400);
-    require(find_text(settings_page, "Bluetooth") != nullptr, "Overflow must cancel without a menu click");
+    require(find_text(settings_page, "Bluetooth") != nullptr, "Canceled input must not click a menu row");
     captured_at = lv_tick_get();
     input_history.push({true, 233, 180, captured_at});
     input_history.push({false, 233, 180, captured_at + 40});
@@ -452,7 +519,20 @@ int render_all()
                 "Touch back must close camera without issuing shutter or movie commands");
     }
     check_extensions();
+    toolbox::shell_detach();
+    check_drawer(8);
+    check_drawer(20);
     std::cout << "Passed camera UI and real KEYA/KEYB paths, buffered flick/list swipe/tap/cancel, DMA area/stride/RGB565 staging, unlock snapshot lifecycle, LVGL render, inertia, menu clearance, battery fill, overlay timing and real stopwatch button-path checks\n";
     return 0;
 }
-int main(int argc, char**) { full_render = argc > 1; try { return render_all(); } catch (const std::exception& error) { std::cerr << error.what() << "\n"; return 1; } }
+int main(int argc, char** argv)
+{
+    full_render = argc > 1 && std::string_view(argv[1]) == "full";
+    capture_dir = std::filesystem::absolute(argv[0]).parent_path() / "images";
+    try {
+        return render_all();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << "\n";
+        return 1;
+    }
+}

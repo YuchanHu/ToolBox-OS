@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 32 px
  * Bpp: 4
- * Opts: --size 32 --bpp 4 --format lvgl --font F:\CodeFiles\ESP32-S3\ToolBox OS\reference\MiSans\ttf\MiSans-Semibold.ttf -o F:\CodeFiles\ESP32-S3\ToolBox OS\main\assets\fonts\toolbox_misans_32.c -r 32-126
+ * Opts: --size 32 --bpp 4 --format lvgl --font reference\MiSans\ttf\MiSans-Semibold.ttf -o main/assets/fonts/toolbox_misans_32.c -r 32-126
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

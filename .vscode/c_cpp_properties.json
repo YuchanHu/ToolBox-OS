@@ -3,7 +3,7 @@
     {
       "name": "ESP-IDF",
       "compilerPath": "",
-      "compileCommands": "f:\\CodeFiles\\ESP32-S3\\ToolBox OS\\build-toolbox\\compile_commands.json",
+      "compileCommands": "${workspaceFolder}/build-toolbox/compile_commands.json",
       "intelliSenseMode": "gcc-x86",
       "includePath": [
         "${workspaceFolder}/**"

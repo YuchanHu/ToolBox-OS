@@ -5,6 +5,7 @@
  */
 #include "hal.h"
 #include "display_frame.h"
+#include "refresh_metrics.h"
 #include <system/shell.h>
 #include <system/touch_input.h>
 #include "utils/settings/settings.h"
@@ -37,7 +38,8 @@ static constexpr gpio_num_t cfg_pin_rst  = GPIO_NUM_NC;
 static SemaphoreHandle_t panel_mutex;
 // Keep the internal staging buffers small enough for Wi-Fi and BLE coexistence.
 // Full frames live in PSRAM; only these alternating strips require DMA RAM.
-static constexpr int dma_rows = 8;
+static constexpr int dma_rows = CONFIG_TOOLBOX_DMA_ROWS;
+namespace perf = toolbox::perf;
 static uint8_t* dma_buffers[2];
 
 class Panel_CO5300 : public lgfx::Panel_AMOLED {
@@ -136,34 +138,9 @@ public:
 
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
-        enableFrameBuffer(true);
-
         _panel_instance.setBrightness(128);
 
         return true;
-    }
-
-    bool enableFrameBuffer(bool auto_display = false)
-    {
-        if (_panel_instance.initPanelFb()) {
-            auto fbPanel = _panel_instance.getPanelFb();
-            if (fbPanel) {
-                fbPanel->setBus(&_bus_instance);
-                fbPanel->setAutoDisplay(auto_display);
-                setPanel(fbPanel);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void disableFrameBuffer()
-    {
-        auto fbPanel = _panel_instance.getPanelFb();
-        if (fbPanel) {
-            _panel_instance.deinitPanelFb();
-            setPanel(&_panel_instance);
-        }
     }
 
     void setBrightness(uint8_t brightness)
@@ -186,9 +163,9 @@ public:
             const int rows = std::min<int>(dma_rows, area.y2 - y + 1);
             auto* buffer = dma_buffers[index++ & 1];
             if (y != area.y1) {
-                const int64_t pack_start = esp_timer_get_time();
+                const auto pack_start = perf::now();
                 toolbox::display::pack_rows(buffer, pixels, stride, area, y, rows, false);
-                packing_us += static_cast<uint32_t>(esp_timer_get_time() - pack_start);
+                packing_us += perf::now() - pack_start;
             }
             // Packing overlaps DMA. Wait before touching SPI registers, including
             // the <=64-byte tail path which uses the SPI FIFO instead of DMA.
@@ -297,29 +274,47 @@ static void touch_rtos_task(void*)
     uint32_t last_good = GetHAL().millis();
     bool failed_gesture = false;
     while (true) {
+        static uint32_t previous = 0;
+        const auto start = perf::now();
         const bool valid = _cst820->read();
+        const auto sampled = perf::now();
         const uint32_t now = GetHAL().millis();
+        if (previous) perf::sample(perf::touch_sample_interval, start - previous);
+        previous = start;
+        perf::sample(perf::touch_read_time, sampled - start);
+        if (!valid) perf::sample(perf::touch_read_error, 1);
         if (valid) {
             last_good = now;
             failed_gesture = false;
             const bool pressed = _cst820->isPressed();
-            const int16_t x = _cst820->getX(), y = _cst820->getY();
+            int16_t x = _cst820->getX(), y = _cst820->getY();
             portENTER_CRITICAL(&touch_mux);
+            const auto overflows = touch_history.overflows();
             // A release packet can carry the final movement. Feed that movement
             // before pen-up so LVGL can cancel a click and start scrolling.
-            if (!pressed && _cst820->isReleaseEvent() && touch_history.latest.pressed &&
-                x >= 0 && x < 468 && y >= 0 && y < 466) {
-                touch_history.push({true, x, y, now});
+            if (!pressed && touch_history.latest.pressed) {
+                if (_cst820->isReleaseEvent() && x >= 0 && x < 468 && y >= 0 && y < 466)
+                    touch_history.push({true, x, y, now, false, sampled});
+                x = touch_history.latest.x;
+                y = touch_history.latest.y;
             }
-            touch_history.push({pressed, x, y, now});
+            touch_history.push({pressed, x, y, now, false, sampled});
+            const auto depth = touch_history.size();
+            const auto overflow = touch_history.overflows() - overflows;
             portEXIT_CRITICAL(&touch_mux);
+            if (depth) perf::sample(perf::touch_queue_depth, depth);
+            if (overflow) perf::sample(perf::touch_overflow, overflow);
         } else if (!failed_gesture && now - last_good >= 80) {
             portENTER_CRITICAL(&touch_mux);
             touch_history.cancel(now);
             portEXIT_CRITICAL(&touch_mux);
             failed_gesture = true;
         }
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(4));
+        if (xTaskDelayUntil(&wake, pdMS_TO_TICKS(4)) == pdFALSE) {
+            // After a failed or slow bus transaction, resume at the normal cadence.
+            wake = xTaskGetTickCount();
+            xTaskDelayUntil(&wake, pdMS_TO_TICKS(4));
+        }
     }
 }
 
@@ -360,15 +355,22 @@ static SemaphoreHandle_t te_ready;
 static QueueHandle_t frame_queue;
 static std::atomic<bool> _lvgl_update_enabled = false;
 static bool frame_pending = false; // Accessed only while holding xGuiSemaphore.
+static bool refresh_deferred = false;
 static uint32_t frame_stride;
-static lv_area_t dirty_area;
-static bool has_dirty_area = false;
-static std::atomic<uint32_t> te_edge_us{0}, te_period_us{0}, te_edges{0};
-static std::atomic<bool> redraw_needed{false};
+static toolbox::display::FrameRegions dirty_regions;
+static toolbox::display::FrameRegions repair_regions; // Published before frame_done.
+static std::atomic<uint32_t> te_edge_us{0}, te_period_us{0};
+static uint32_t dirty_pixels, recent_input_us, pending_input_us, input_consumed_us, gui_acquired_us;
+static uint32_t repair_input_us;
+#ifdef CONFIG_TOOLBOX_PERF
+static uint32_t render_started_us, previous_render_us, sync_started_us;
+#endif
 
 struct DisplayFrame {
     const uint8_t* pixels;
-    lv_area_t area;
+    toolbox::display::FrameRegions regions;
+    uint32_t input_us;
+    uint32_t activity_us;
 };
 
 static void IRAM_ATTR te_interrupt(void*)
@@ -376,71 +378,94 @@ static void IRAM_ATTR te_interrupt(void*)
     const uint32_t now = static_cast<uint32_t>(esp_timer_get_time());
     const uint32_t previous = te_edge_us.exchange(now, std::memory_order_relaxed);
     if (previous) te_period_us.store(now - previous, std::memory_order_relaxed);
-    te_edges.fetch_add(1, std::memory_order_relaxed);
     BaseType_t wake = pdFALSE;
     xSemaphoreGiveFromISR(te_ready, &wake);
     if (wake) portYIELD_FROM_ISR();
 }
 
+static bool wait_for_te()
+{
+    constexpr uint32_t phase_limit_us = 500; // V5 window, kept for panel comparison.
+    static uint32_t used_edge = 0;
+    const auto start = perf::now();
+    xSemaphoreTake(te_ready, 0);
+    uint32_t edge = te_edge_us.load(std::memory_order_relaxed);
+    uint32_t phase = static_cast<uint32_t>(esp_timer_get_time()) - edge;
+    if (edge == used_edge || phase > phase_limit_us) {
+        if (xSemaphoreTake(te_ready, pdMS_TO_TICKS(25)) != pdTRUE) {
+            perf::sample(perf::te_timeout, 1);
+            perf::sample(perf::te_wait_time, perf::now() - start);
+            return false;
+        }
+        edge = te_edge_us.load(std::memory_order_relaxed);
+        phase = static_cast<uint32_t>(esp_timer_get_time()) - edge;
+        if (edge == used_edge || phase > phase_limit_us) {
+            used_edge = edge;
+            perf::sample(perf::te_missed, 1);
+            perf::sample(perf::te_wait_time, perf::now() - start);
+            return false;
+        }
+    }
+    used_edge = edge;
+    perf::sample(perf::te_phase, phase);
+    perf::sample(perf::te_wait_time, perf::now() - start);
+    return true;
+}
+
+static uint32_t stage_first_strip(const DisplayFrame& frame, const lv_area_t& area)
+{
+    const auto start = perf::now();
+    toolbox::display::pack_rows(dma_buffers[0], frame.pixels, frame_stride, area,
+        area.y1, std::min<int>(dma_rows, area.y2 - area.y1 + 1), false);
+    return perf::now() - start;
+}
+
 static void display_rtos_task(void*)
 {
-    uint32_t frames = 0, te_timeouts = 0, late_edges = 0;
-    int64_t interval_start = esp_timer_get_time();
-    int64_t transfer_total = 0, transfer_max = 0, packing_total = 0;
-    uint32_t over_budget = 0;
-    uint32_t phase_max = 0;
+    uint32_t previous_present = 0;
+    bool previous_active = false;
     DisplayFrame frame;
     while (true) {
         if (xQueueReceive(frame_queue, &frame, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            // LVGL renders directly in panel byte order. Stage only the
-            // changed rectangle, with no intermediate full-screen conversion.
-            const int64_t pack_start = esp_timer_get_time();
-            toolbox::display::pack_rows(dma_buffers[0], frame.pixels, frame_stride,
-                frame.area, frame.area.y1, std::min<int>(dma_rows, frame.area.y2 - frame.area.y1 + 1), false);
-            uint32_t packing_us = static_cast<uint32_t>(esp_timer_get_time() - pack_start);
+            // Prepare the first strip before waiting for the panel's blanking edge.
+            uint32_t packing_us = stage_first_strip(frame, frame.regions.areas[0]);
             xSemaphoreTake(panel_mutex, portMAX_DELAY);
-            xSemaphoreTake(te_ready, 0);
-            bool synchronized = false;
-            for (int attempt = 0; attempt < 3 && !synchronized; ++attempt) {
-                if (xSemaphoreTake(te_ready, pdMS_TO_TICKS(25)) != pdTRUE) {
-                    ++te_timeouts;
-                    break;
+            if (wait_for_te()) {
+                const auto start = perf::now();
+                unsigned pixels = 0, bursts = 0;
+                for (unsigned i = 0; i < frame.regions.count; ++i) {
+                    const auto& area = frame.regions.areas[i];
+                    if (i) packing_us += stage_first_strip(frame, area);
+                    packing_us += _display->present(frame.pixels, frame_stride, area);
+                    pixels += lv_area_get_size(&area);
+                    bursts += (area.y2 - area.y1 + dma_rows) / dma_rows;
                 }
-                const uint32_t phase = static_cast<uint32_t>(esp_timer_get_time()) - te_edge_us.load(std::memory_order_relaxed);
-                phase_max = std::max(phase_max, phase);
-                synchronized = phase <= 500;
-                if (!synchronized) ++late_edges;
-            }
-            if (synchronized) {
-                const int64_t start = esp_timer_get_time();
-                packing_us += _display->present(frame.pixels, frame_stride, frame.area);
-                const int64_t transfer = esp_timer_get_time() - start;
-                packing_total += packing_us;
-                const uint32_t period = te_period_us.load();
-                if (period && transfer > period) ++over_budget;
-                transfer_total += transfer;
-                transfer_max = std::max(transfer_max, transfer);
-                ++frames;
+                const auto presented = perf::now();
+                const auto period = te_period_us.load(std::memory_order_relaxed);
+                const auto transfer = presented - start;
+                perf::sample(perf::dma_transfer_time, transfer);
+                perf::sample(perf::dma_pack_time, packing_us);
+                perf::sample(perf::transfer_pixels, pixels);
+                perf::sample(perf::dma_bursts, bursts);
+                if (period) perf::sample(perf::te_period, period);
+                if (period && transfer > period) perf::sample(perf::dma_over_budget, 1);
+                const bool active = frame.activity_us && presented - frame.activity_us < 250000;
+                if (previous_present) {
+                    perf::sample(perf::present_interval, presented - previous_present);
+                    if (active && previous_active)
+                        perf::sample(perf::active_present_interval, presented - previous_present);
+                }
+                if (frame.input_us)
+                    perf::sample(perf::input_to_present, presented - frame.input_us);
+                previous_present = presented;
+                previous_active = active;
             } else {
-                // Keep the previous image when synchronization is lost. Retry
-                // through LVGL, including a static page whose only frame failed.
-                redraw_needed.store(true);
+                repair_regions = frame.regions;
+                repair_input_us = frame.input_us;
+                perf::sample(perf::frame_drop, 1);
             }
             xSemaphoreGive(panel_mutex);
             xSemaphoreGive(frame_done);
-        }
-        const int64_t now = esp_timer_get_time();
-        if (now - interval_start >= 5000000) {
-            ESP_LOGI("Display", "refresh-v5: %.1f fps (includes idle), tx avg/max %lld/%lld us, copy avg %lld us, over-budget %lu, TE period %lu us, edges %lu, late %lu, timeout %lu, phase max %lu us",
-                frames * 1000000.0 / (now - interval_start),
-                frames ? transfer_total / frames : 0, transfer_max,
-                frames ? packing_total / frames : 0, static_cast<unsigned long>(over_budget),
-                static_cast<unsigned long>(te_period_us.load()), static_cast<unsigned long>(te_edges.exchange(0)),
-                static_cast<unsigned long>(late_edges), static_cast<unsigned long>(te_timeouts), static_cast<unsigned long>(phase_max));
-            interval_start = now;
-            frames = te_timeouts = late_edges = phase_max = 0;
-            transfer_total = transfer_max = packing_total = 0;
-            over_budget = 0;
         }
     }
 }
@@ -450,59 +475,112 @@ static uint32_t lvgl_millis()
     return static_cast<uint32_t>(esp_timer_get_time() / 1000);
 }
 
+static bool finish_frame(TickType_t timeout)
+{
+    if (frame_pending && xSemaphoreTake(frame_done, timeout) == pdTRUE)
+        frame_pending = false;
+    return !frame_pending;
+}
+
 static void wait_for_frame(lv_display_t*)
 {
-    if (frame_pending) {
-        xSemaphoreTake(frame_done, portMAX_DELAY);
-        frame_pending = false;
+    finish_frame(portMAX_DELAY);
+}
+
+static void refresh_if_ready(lv_timer_t* timer)
+{
+    // LVGL DIRECT sync copies pixels out of the buffer held by DMA.
+    // Gate only this timer. Input, animations and application logic can
+    // continue to invalidate objects while the previous frame is in flight.
+    if (!finish_frame(0)) {
+        refresh_deferred = true;
+        return;
     }
+    refresh_deferred = false;
+    for (unsigned i = 0; i < repair_regions.count; ++i)
+        lv_obj_invalidate_area(lv_screen_active(), &repair_regions.areas[i]);
+    repair_regions.count = 0;
+    if (!pending_input_us) pending_input_us = repair_input_us;
+    repair_input_us = 0;
+    lv_display_refr_timer(timer);
+}
+
+static bool lock_gui()
+{
+    const auto start = perf::now();
+    if (xSemaphoreTake(xGuiSemaphore, portMAX_DELAY) != pdTRUE) return false;
+    gui_acquired_us = perf::now();
+    perf::sample(perf::gui_lock_wait, gui_acquired_us - start);
+    return true;
+}
+
+static void unlock_gui()
+{
+    perf::sample(perf::gui_lock_hold, perf::now() - gui_acquired_us);
+    xSemaphoreGive(xGuiSemaphore);
 }
 
 static void lvgl_rtos_task(void*)
 {
     while (true) {
         uint32_t next = 8;
-        if (_lvgl_update_enabled && xSemaphoreTake(xGuiSemaphore, portMAX_DELAY) == pdTRUE) {
+        if (_lvgl_update_enabled && lock_gui()) {
             if (_lvgl_update_enabled) {
-                // Keep the two cores from contending for PSRAM while the panel
-                // is scanning a transfer. DIRECT also waits before buffer sync.
-                wait_for_frame(nullptr);
-                if (redraw_needed.exchange(false)) {
-                    lv_obj_invalidate(lv_screen_active());
-                    lv_obj_invalidate(lv_layer_top());
+                // Wake a paused refresh timer when a static frame needs repair.
+                if (finish_frame(0) && (refresh_deferred || repair_regions.count)) {
+                    auto* timer = lv_display_get_refr_timer(lv_display_get_default());
+                    lv_timer_resume(timer);
+                    lv_timer_ready(timer);
                 }
                 next = lv_timer_handler();
             }
-            xSemaphoreGive(xGuiSemaphore);
+            unlock_gui();
         }
-        // Yield to app lifecycle work, with an 8 ms upper bound for touch input.
         vTaskDelay(pdMS_TO_TICKS(std::clamp<uint32_t>(next, 1, 8)));
     }
 }
 
+#ifdef CONFIG_TOOLBOX_PERF
+static void measure_refresh(lv_event_t* event)
+{
+    const auto now = perf::now();
+    switch (lv_event_get_code(event)) {
+        case LV_EVENT_REFR_START:
+            render_started_us = sync_started_us = 0;
+            break;
+        case LV_EVENT_FLUSH_WAIT_FINISH:
+            // The first wait before RENDER_START belongs to DIRECT buffer sync.
+            if (!render_started_us) sync_started_us = now;
+            break;
+        case LV_EVENT_RENDER_START:
+            if (sync_started_us) perf::sample(perf::buffer_sync_time, now - sync_started_us);
+            if (previous_render_us) perf::sample(perf::render_interval, now - previous_render_us);
+            previous_render_us = render_started_us = now;
+            break;
+        case LV_EVENT_RENDER_READY:
+            if (render_started_us) perf::sample(perf::render_time, now - render_started_us);
+            break;
+        default:
+            break;
+    }
+}
+#endif
+
 static void lvgl_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* pixels)
 {
-    // DIRECT can flush several dirty areas for one rendered frame. Merge
-    // them and submit once, after all widgets in the frame have been drawn.
-    if (!has_dirty_area) {
-        dirty_area = *area;
-        has_dirty_area = true;
-    } else {
-        dirty_area.x1 = std::min(dirty_area.x1, area->x1);
-        dirty_area.y1 = std::min(dirty_area.y1, area->y1);
-        dirty_area.x2 = std::max(dirty_area.x2, area->x2);
-        dirty_area.y2 = std::max(dirty_area.y2, area->y2);
-    }
+    dirty_regions.add(toolbox::display::aligned_area(
+        *area, lv_display_get_horizontal_resolution(disp), lv_display_get_vertical_resolution(disp)));
+    dirty_pixels += lv_area_get_size(area);
     if (!lv_display_flush_is_last(disp)) {
         lv_display_flush_ready(disp);
         return;
     }
-    const DisplayFrame frame = {pixels, toolbox::display::aligned_area(
-        dirty_area, lv_display_get_horizontal_resolution(disp), lv_display_get_vertical_resolution(disp))};
-    has_dirty_area = false;
+    const uint32_t input_us = perf::now() - input_consumed_us < 250000 ? pending_input_us : 0;
+    const DisplayFrame frame = {pixels, dirty_regions, input_us, recent_input_us};
+    perf::sample(perf::dirty_pixels, dirty_pixels);
+    dirty_regions.count = dirty_pixels = pending_input_us = 0;
     frame_pending = true;
-    // LVGL's flush-wait callback prevents reuse until DMA ends.
-    const BaseType_t queued = xQueueSend(frame_queue, &frame, portMAX_DELAY);
+    const BaseType_t queued = xQueueSend(frame_queue, &frame, 0);
     configASSERT(queued == pdTRUE);
 }
 
@@ -515,6 +593,13 @@ static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     const bool more = !touch_history.empty();
     portEXIT_CRITICAL(&touch_mux);
     if (available) {
+        if (sample.sampled_us) {
+            perf::sample(perf::touch_queue_delay, perf::now() - sample.sampled_us);
+            if (!sample.cancel) {
+                pending_input_us = recent_input_us = sample.sampled_us;
+                input_consumed_us = perf::now();
+            }
+        }
         toolbox::route_touch_sample(indev, data, sample, more);
         last = *data;
     } else {
@@ -551,7 +636,12 @@ void Hal::lvgl_init()
     ESP_ERROR_CHECK(buf1 && buf2 && dma_buffers[0] && dma_buffers[1] ? ESP_OK : ESP_ERR_NO_MEM);
     lv_display_set_buffers_with_stride(disp, buf1, buf2, frame_bytes, frame_stride, LV_DISPLAY_RENDER_MODE_DIRECT);
     lv_display_set_flush_wait_cb(disp, wait_for_frame);
-    lv_timer_set_period(lv_display_get_refr_timer(disp), 16);
+    auto* refresh_timer = lv_display_get_refr_timer(disp);
+    lv_timer_set_cb(refresh_timer, refresh_if_ready);
+    lv_timer_set_period(refresh_timer, 16);
+#ifdef CONFIG_TOOLBOX_PERF
+    lv_display_add_event_cb(disp, measure_refresh, LV_EVENT_ALL, nullptr);
+#endif
 
     lvTouchpad = lv_indev_create();
     LV_ASSERT_MALLOC(lvTouchpad);
@@ -564,7 +654,15 @@ void Hal::lvgl_init()
     lv_indev_set_read_cb(lvTouchpad, lvgl_read_cb);
     lv_indev_set_display(lvTouchpad, disp);
 
-    lv_timer_set_period(lv_indev_get_read_timer(lvTouchpad), 4);
+    auto* input_timer = lv_indev_get_read_timer(lvTouchpad);
+    lv_timer_set_period(input_timer, 4);
+#ifdef CONFIG_TOOLBOX_PERF
+    lv_timer_set_cb(input_timer, [](lv_timer_t* timer) {
+        const auto start = perf::now();
+        lv_indev_read(static_cast<lv_indev_t*>(lv_timer_get_user_data(timer)));
+        perf::sample(perf::event_process_time, perf::now() - start);
+    });
+#endif
     lv_indev_set_scroll_limit(lvTouchpad, 6);
 
     xGuiSemaphore = xSemaphoreCreateMutex();
@@ -583,7 +681,7 @@ void Hal::lvgl_init()
     const BaseType_t gui_task = xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl", 16 * 1024,
                                                        nullptr, 4, nullptr, 1);
     ESP_ERROR_CHECK(display_task == pdPASS && gui_task == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_LOGI("Display", "RGB565_SWAPPED DIRECT double buffer, TE GPIO38, 80MHz QSPI, refresh 16ms / independent touch 4ms");
+    ESP_LOGI("Display", "Refresh V6: RGB565_SWAPPED DIRECT, TE GPIO38, 80MHz QSPI, DMA %d rows, touch 4ms", dma_rows);
 
     startLvglUpdate();
 
@@ -597,12 +695,12 @@ void Hal::lvgl_init()
 
 bool Hal::lvglLock()
 {
-    return xSemaphoreTake(xGuiSemaphore, portMAX_DELAY) == pdTRUE ? true : false;
+    return lock_gui();
 }
 
 void Hal::lvglUnlock()
 {
-    xSemaphoreGive(xGuiSemaphore);
+    unlock_gui();
 }
 
 void Hal::startLvglUpdate()

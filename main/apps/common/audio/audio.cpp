@@ -139,4 +139,10 @@ void play_random_tone(int semitoneShift, float durationSec, float volumeScale)
     play_tone_from_midi(midi, durationSec, volumeScale);
 }
 
+void stop()
+{
+    std::vector<int16_t> silence;
+    GetHAL().audioPlay(silence, true);
+}
+
 }  // namespace audio

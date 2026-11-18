@@ -6,15 +6,20 @@
 #include <vector>
 #include <hal/utils/button/Button_Class.hpp>
 extern bool preview_analog;
-inline std::tm* localtime_r(const std::time_t* time, std::tm* result)
+inline std::tm* toolbox_preview_localtime(const std::time_t* time, std::tm* result)
 {
+#ifdef _WIN32
     localtime_s(result, time);
+#else
+    ::localtime_r(time, result);
+#endif
     result->tm_year = 126; result->tm_mon = 10; result->tm_mday = 16; result->tm_wday = 1;
     result->tm_hour = preview_analog ? 10 : 18; result->tm_min = preview_analog ? 9 : 36; result->tm_sec = 30;
     return result;
 }
+#define localtime_r toolbox_preview_localtime
 struct Hal {
-    void buttonFeedback(bool, bool = true) {}
+    void buttonFeedback(bool, bool = true) { vibrate(20, 60); }
     enum class WifiMode { Off, Connecting, Connected, ConfigAp, Error };
     struct WifiStatus {
         bool enabled = true, connected = true, configMode = false;

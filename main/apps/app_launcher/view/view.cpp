@@ -11,6 +11,14 @@ LV_IMAGE_DECLARE(icon_indicator_right);
 using namespace toolbox;
 namespace {
 std::vector<int> recent_apps;
+constexpr int page_width = 466;
+constexpr int middle_page = 40;
+constexpr int last_page = middle_page * 2;
+
+int wrap(int index, int count)
+{
+    return (index % count + count) % count;
+}
 }
 
 view::LauncherView::~LauncherView()
@@ -34,28 +42,25 @@ void view::LauncherView::init(std::vector<mooncake::AppProps_t> apps)
     lv_obj_set_scroll_snap_x(scroll_, LV_SCROLL_SNAP_CENTER);
     lv_obj_set_scrollbar_mode(scroll_, LV_SCROLLBAR_MODE_OFF);
     const int count = apps_.size();
-    for (int copy = 0; copy < 5; ++copy) {
-        for (int index = 0; index < count; ++index) {
-            auto* item = ui::panel(scroll_, (copy * count + index) * 466, 0, 466, 186);
-            lv_obj_add_flag(item, LV_OBJ_FLAG_SNAPPABLE);
-            const lv_image_dsc_t* image = apps_[index].info.icon ? static_cast<const lv_image_dsc_t*>(apps_[index].info.icon)
-                : &toolbox_icon_box_78;
-            auto* card = ui::panel(item, 0, 0, 170, 170);
-            lv_obj_center(card);
-            lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-            auto* artwork = lv_image_create(card);
-            lv_image_set_src(artwork, image);
-            lv_image_set_pivot(artwork, image->header.w / 2, image->header.h / 2);
-            lv_image_set_scale(artwork, 282);
-            // The generated silhouettes sit slightly above their canvas center.
-            lv_obj_align(artwork, LV_ALIGN_CENTER, 0, 4);
-            lv_obj_remove_flag(artwork, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_user_data(card, reinterpret_cast<void*>(static_cast<uintptr_t>(index)));
-            lv_obj_add_event_cb(card, [](lv_event_t* event) {
+    if (count) {
+        // Maintain scroll bounds independently of the movable snap targets.
+        ui::panel(scroll_, last_page * page_width, 0, page_width, 1);
+        for (auto& slot : slots_) {
+            slot.item = ui::panel(scroll_, 0, 0, page_width, 186);
+            lv_obj_add_flag(slot.item, LV_OBJ_FLAG_SNAPPABLE);
+            slot.card = ui::panel(slot.item, 0, 0, 170, 170);
+            lv_obj_center(slot.card);
+            lv_obj_add_flag(slot.card, LV_OBJ_FLAG_CLICKABLE);
+            slot.artwork = lv_image_create(slot.card);
+            lv_obj_align(slot.artwork, LV_ALIGN_CENTER, 0, 4);
+            lv_obj_remove_flag(slot.artwork, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(slot.card, [](lv_event_t* event) {
                 auto* self = static_cast<LauncherView*>(lv_event_get_user_data(event));
                 auto* card = static_cast<lv_obj_t*>(lv_event_get_target(event));
-                self->pending_app_ = self->apps_[reinterpret_cast<uintptr_t>(lv_obj_get_user_data(card))].appID;
+                auto* slot = static_cast<Slot*>(lv_obj_get_user_data(card));
+                self->pending_app_ = self->apps_[slot->app].appID;
             }, LV_EVENT_CLICKED, this);
+            lv_obj_set_user_data(slot.card, &slot);
         }
     }
     auto* previous = ui::icon_button(panel_, &icon_indicator_left, 7, 153, 52, 160, [](lv_event_t*) {});
@@ -71,46 +76,89 @@ void view::LauncherView::init(std::vector<mooncake::AppProps_t> apps)
     lv_obj_add_event_cb(next, [](lv_event_t* e) { static_cast<LauncherView*>(lv_event_get_user_data(e))->step(1); }, LV_EVENT_CLICKED, this);
     name_ = ui::text(panel_, count ? apps_[0].info.name.c_str() : "", 0, 326, 466);
     dots_ = ui::panel(panel_, 0, 381, 466, 24);
-    for (int index = 0; index < count; ++index) ui::panel(dots_, 0, 0, 8, 8, ui::accent, 6);
-    lv_obj_update_layout(scroll_);
-    lv_obj_scroll_to_x(scroll_, 2 * count * 466, LV_ANIM_OFF);
+    for (int index = 0; index < count; ++index) {
+        ui::panel(dots_, 0, 0, 6, 6, ui::accent, 6);
+        update_dot(index, false);
+    }
+    if (count) {
+        bind_slots(middle_page);
+        lv_obj_update_layout(scroll_);
+        lv_obj_scroll_to_x(scroll_, middle_page * page_width, LV_ANIM_OFF);
+        select_page();
+        lv_obj_add_event_cb(scroll_, [](lv_event_t* event) {
+            static_cast<LauncherView*>(lv_event_get_user_data(event))->select_page();
+        }, LV_EVENT_SCROLL, this);
+        lv_obj_add_event_cb(scroll_, [](lv_event_t* event) {
+            auto* view = static_cast<LauncherView*>(lv_event_get_user_data(event));
+            shell_drawer_settled(view->root());
+        }, LV_EVENT_SCROLL_END, this);
+    }
     GetHAL().bootLogo.reset();
-    update();
+}
+
+void view::LauncherView::bind_slots(int page)
+{
+    const int count = apps_.size();
+    for (int index = page - 2; index <= page + 2; ++index) {
+        auto& slot = slots_[wrap(index, slots_.size())];
+        if (slot.page == index) continue;
+        slot.page = index;
+        lv_obj_set_x(slot.item, index * page_width);
+        const int app = wrap(index - middle_page, count);
+        if (slot.app == app) continue;
+        slot.app = app;
+        const auto* image = apps_[app].info.icon ? static_cast<const lv_image_dsc_t*>(apps_[app].info.icon)
+                                               : &toolbox_icon_box_78;
+        lv_image_set_src(slot.artwork, image);
+        lv_image_set_pivot(slot.artwork, image->header.w / 2, image->header.h / 2);
+        lv_image_set_scale(slot.artwork, image == &toolbox_icon_box_78 ? 282 : LV_SCALE_NONE);
+    }
+}
+
+void view::LauncherView::update_dot(int index, bool active)
+{
+    auto* dot = lv_obj_get_child(dots_, index);
+    const int size = active ? 12 : 6;
+    lv_obj_set_size(dot, size, size);
+    lv_obj_set_pos(dot, 233 - (static_cast<int>(apps_.size()) - 1) * 8 + index * 16 - size / 2, 12 - size / 2);
+    lv_obj_set_style_opa(dot, active ? LV_OPA_COVER : LV_OPA_50, 0);
+}
+
+void view::LauncherView::select_page()
+{
+    const int live_page = (lv_obj_get_scroll_x(scroll_) + page_width / 2) / page_width;
+    bind_slots(live_page);
+    const int next = wrap(live_page - middle_page, apps_.size());
+    if (next == selected_) return;
+    if (selected_ >= 0) update_dot(selected_, false);
+    selected_ = next;
+    lv_label_set_text(name_, apps_[selected_].info.name.c_str());
+    update_dot(selected_, true);
 }
 
 void view::LauncherView::step(int direction)
 {
-    const int index = (lv_obj_get_scroll_x(scroll_) + 233) / 466;
-    lv_obj_scroll_to_x(scroll_, (index + direction) * 466, LV_ANIM_ON);
+    if (apps_.empty()) return;
+    const int page = (lv_obj_get_scroll_x(scroll_) + page_width / 2) / page_width;
+    lv_obj_scroll_to_x(scroll_, (page + direction) * page_width, LV_ANIM_ON);
 }
 
 void view::LauncherView::update()
 {
-    const int count = apps_.size();
-    if (count == 0) return;
+    if (apps_.empty()) return;
     const auto key = keys_->update();
     if (key == input::KeyEvent::GoPrevious) step(-1);
     if (key == input::KeyEvent::GoNext) step(1);
     if (key == input::KeyEvent::GoHome) shell_lock();
-    int x = lv_obj_get_scroll_x(scroll_);
-    if (!lv_obj_is_scrolling(scroll_) && !lv_indev_get_scroll_obj(GetHAL().lvTouchpad)) {
-        const int span = count * 466;
-        if (x < span || x >= 4 * span) {
-            x = 2 * span + ((x % span) + span) % span;
-            lv_obj_scroll_to_x(scroll_, x, LV_ANIM_OFF);
-        }
-    }
-    const int selected = ((x + 233) / 466) % count;
-    if (selected != selected_) {
-        selected_ = selected;
-        lv_label_set_text(name_, apps_[selected_].info.name.c_str());
-        for (int index = 0; index < count; ++index) {
-            auto* dot = lv_obj_get_child(dots_, index);
-            const int size = index == selected_ ? 12 : 6;
-            lv_obj_set_size(dot, size, size);
-            lv_obj_set_pos(dot, 233 - (count - 1) * 8 + index * 16 - size / 2, 12 - size / 2);
-            lv_obj_set_style_opa(dot, index == selected_ ? LV_OPA_COVER : LV_OPA_50, 0);
-        }
+    const int x = lv_obj_get_scroll_x(scroll_);
+    const int page = (x + page_width / 2) / page_width;
+    if ((page < middle_page / 2 || page > middle_page * 3 / 2) &&
+        !lv_obj_is_scrolling(scroll_) &&
+        (!GetHAL().lvTouchpad || !lv_indev_get_scroll_obj(GetHAL().lvTouchpad))) {
+        const int rebased = middle_page + selected_;
+        bind_slots(rebased);
+        lv_obj_update_layout(scroll_);
+        lv_obj_scroll_to_x(scroll_, rebased * page_width + x - page * page_width, LV_ANIM_OFF);
     }
     if (pending_app_ >= 0 && onAppClicked) {
         const int id = pending_app_;

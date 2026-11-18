@@ -1,12 +1,27 @@
-param([string]$BuildDirectory = 'build-toolbox')
+param(
+    [string]$BuildDirectory = 'build-toolbox',
+    [string]$IdfPath = $env:IDF_PATH
+)
+
 $ErrorActionPreference = 'Stop'
-$env:IDF_PATH = 'F:\esp\.espressif\v5.5.5\esp-idf'
-$env:ESP_IDF_VERSION = '5.5.5'
-$env:IDF_PYTHON_ENV_PATH = 'C:\Users\Yuchan\.espressif\python_env\idf5.5_py3.10_env'
-$env:PATH = 'C:\Users\Yuchan\.espressif\tools\cmake\3.30.2\bin;C:\Users\Yuchan\.espressif\tools\ninja\1.12.1;C:\Users\Yuchan\.espressif\tools\xtensa-esp-elf\esp-14.2.0_20260121\xtensa-esp-elf\bin;C:\Users\Yuchan\.espressif\tools\ccache\4.11.2\ccache-4.11.2-windows-x86_64;' + $env:IDF_PYTHON_ENV_PATH + '\Scripts;' + $env:PATH
+if (!$IdfPath -or !(Test-Path -LiteralPath (Join-Path $IdfPath 'tools/idf.py'))) {
+    throw 'ESP-IDF not found. Export the ESP-IDF environment or pass -IdfPath.'
+}
+$IdfPath = (Resolve-Path -LiteralPath $IdfPath).Path
+$exportNeeded = $IdfPath -ne $env:IDF_PATH -or !$env:IDF_PYTHON_ENV_PATH -or !(Get-Command ninja -ErrorAction SilentlyContinue)
+if ($exportNeeded) {
+    . (Join-Path $IdfPath 'export.ps1')
+}
+if (!$env:IDF_PYTHON_ENV_PATH) {
+    throw 'ESP-IDF tools are not initialized. Install the ESP-IDF tools and run export.ps1.'
+}
+$idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH 'Scripts/python.exe'
+if (!(Test-Path -LiteralPath $idfPython -PathType Leaf)) {
+    throw 'ESP-IDF Python environment is missing. Run the selected ESP-IDF installation and export scripts.'
+}
 Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
-    & "$env:IDF_PYTHON_ENV_PATH\Scripts\python.exe" "$env:IDF_PATH\tools\idf.py" -B $BuildDirectory -D 'CMAKE_MAKE_PROGRAM=C:/Users/Yuchan/.espressif/tools/ninja/1.12.1/ninja.exe' build
+    & $idfPython (Join-Path $IdfPath 'tools/idf.py') -B $BuildDirectory build
     if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)" }
 } finally {
     Pop-Location

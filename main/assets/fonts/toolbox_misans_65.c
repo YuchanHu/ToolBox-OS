@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 65 px
  * Bpp: 4
- * Opts: --size 65 --bpp 4 --format lvgl --font F:\CodeFiles\ESP32-S3\ToolBox OS\reference\MiSans\ttf\MiSans-Regular.ttf -o F:\CodeFiles\ESP32-S3\ToolBox OS\main\assets\fonts\toolbox_misans_65.c --symbols 0123456789:.-°~
+ * Opts: --size 65 --bpp 4 --format lvgl --font reference\MiSans\ttf\MiSans-Regular.ttf -o main/assets/fonts/toolbox_misans_65.c --symbols 0123456789:.-°~
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

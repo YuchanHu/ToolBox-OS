@@ -34,6 +34,7 @@ void AppStopWatch::onRunning()
 void AppStopWatch::onClose()
 {
     LvglLockGuard lock;
+    stopwatch_.reset();
     _view.reset();
     _key_manager.reset();
 }

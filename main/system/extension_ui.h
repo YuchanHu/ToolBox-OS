@@ -33,7 +33,7 @@ enum class ExtensionAction {
 struct ExtensionEvent {
     ExtensionAction action = ExtensionAction::None;
     int value = 0;
-    std::string text;
+    std::string text{};
 };
 struct ExtensionViewState {
     Extension kind = Extension::Counter;
@@ -75,6 +75,7 @@ class ExtensionView {
     ExtensionEvent pending_;
     uint32_t revealed_at_ = 0, frame_at_ = 0, city_revision_ = UINT32_MAX;
     int previous_day_ = 0;
+    std::array<int, 3> level_display_{};
     static void event(lv_event_t *event);
     static void draw(lv_event_t *event);
     void build();

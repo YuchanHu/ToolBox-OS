@@ -1,4 +1,8 @@
-#include <apps/app_extensions/app_extensions.h>
+#include <apps/app_counter/app_counter.h>
+#include <apps/app_timers/app_timers.h>
+#include <apps/app_focus/app_focus.h>
+#include <apps/app_level/app_level.h>
+#include <apps/app_weather/app_weather.h>
 #include <cJSON.h>
 #include <cmath>
 #include <fstream>
@@ -15,6 +19,7 @@ extern lv_obj_t *find_text(lv_obj_t *, const char *);
 
 namespace audio {
 void play_tone(int, float, float) {}
+void stop() {}
 } // namespace audio
 namespace toolbox {
 WeatherService::WeatherService() {
@@ -33,7 +38,7 @@ void click(const char *text) {
     require(caption != nullptr, text);
     lv_obj_send_event(lv_obj_get_parent(caption), LV_EVENT_CLICKED, nullptr);
 }
-void poll(toolbox::ExtensionApp &app, bool a, bool b, int duration = 80) {
+void poll(mooncake::AppAbility &app, bool a, bool b, int duration = 80) {
     GetHAL().rawA = a;
     GetHAL().rawB = b;
     for (int t = 0; t < duration; t += 10) {
@@ -41,18 +46,18 @@ void poll(toolbox::ExtensionApp &app, bool a, bool b, int duration = 80) {
         app.baseUpdate();
     }
 }
-void key(toolbox::ExtensionApp &app, bool a, int duration = 50) {
+void key(mooncake::AppAbility &app, bool a, int duration = 50) {
     poll(app, a, !a, duration);
     poll(app, false, false);
 }
-void open(toolbox::ExtensionApp &app) {
+void open(mooncake::AppAbility &app) {
     GetHAL().rawA = GetHAL().rawB = false;
     app.baseCreate();
     app.open();
     app.baseUpdate();
     poll(app, false, false);
 }
-void close(toolbox::ExtensionApp &app) {
+void close(mooncake::AppAbility &app) {
     app.close();
     app.baseUpdate();
 }
@@ -172,7 +177,7 @@ void check_extensions() {
         }
     }
     {
-        std::ifstream input("tools/ui-render/fixtures/weather-uapi.json");
+        std::ifstream input(TOOLBOX_UI_SOURCE_DIR "/fixtures/weather-uapi.json");
         std::string body((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         auto *json = cJSON_Parse(body.c_str());
         require(json != nullptr, "Real domestic API response fixture missing");
@@ -220,12 +225,12 @@ void check_extensions() {
     Settings settings("extensions", true);
     settings.SetInt("count", 0);
     {
-        ExtensionApp app(Extension::Counter);
+        AppCounter app;
         open(app);
         const int initial = GetHAL().vibration_count;
-        key(app, true);
+        key(app, false);
         require(find_text(lv_screen_active(), "1") && GetHAL().vibration_count == initial + 1,
-                "A adds once and vibrates once");
+                "B adds once and vibrates once");
         key(app, true, 650);
         require(find_text(lv_screen_active(), "确定重置计数？"), "Hold A opens confirmation");
         key(app, true);
@@ -233,19 +238,19 @@ void check_extensions() {
         click("确定重置");
         poll(app, false, false);
         require(find_text(lv_screen_active(), "0"), "Screen confirm resets counter");
-        key(app, false);
-        require(GetHAL().vibration_count == initial + 3, "Zero boundary is not a valid decrement");
         key(app, true);
+        require(GetHAL().vibration_count == initial + 3, "Zero boundary is not a valid decrement");
+        key(app, false);
         close(app);
     }
     {
-        ExtensionApp app(Extension::Counter);
+        AppCounter app;
         open(app);
         require(find_text(lv_screen_active(), "1"), "Count survives reopen");
         close(app);
     }
     {
-        ExtensionApp app(Extension::Timers);
+        AppTimers app;
         open(app);
         click("1 分钟");
         poll(app, false, false);
@@ -260,7 +265,7 @@ void check_extensions() {
         close(app);
     }
     {
-        ExtensionApp app(Extension::Focus);
+        AppFocus app;
         open(app);
         key(app, false);
         poll(app, false, false, 1200);
@@ -289,7 +294,7 @@ void check_extensions() {
         close(app);
     }
     {
-        ExtensionApp app(Extension::Weather);
+        AppWeather app;
         open(app);
         const int feedback = GetHAL().vibration_count;
         key(app, true);
@@ -303,16 +308,16 @@ void check_extensions() {
         close(app);
     }
     {
-        ExtensionApp app(Extension::Counter);
+        AppCounter app;
         open(app);
         const int feedback = GetHAL().vibration_count;
         poll(app, true, true, 650);
         poll(app, false, false);
-        require(app.currentState() == mooncake::AppAbility::StateSleeping && GetHAL().vibration_count == feedback + 1,
-                "Home chord outranks counter long reset and vibrates once");
+        require(app.currentState() == mooncake::AppAbility::StateSleeping && GetHAL().vibration_count == feedback,
+                "Home chord outranks counter long reset without single-key feedback");
     }
     {
-        ExtensionApp app(Extension::Timers);
+        AppTimers app;
         open(app);
         GetHAL().brightness = 0;
         poll(app, false, false);
@@ -321,7 +326,7 @@ void check_extensions() {
         GetHAL().brightness = 65;
     }
     {
-        ExtensionApp app(Extension::Level);
+        AppLevel app;
         open(app);
         poll(app, false, false, 120);
         key(app, true, 650);

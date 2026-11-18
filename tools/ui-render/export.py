@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 root = Path(__file__).resolve().parent.parent.parent
 output = root / 'ui-preview/screenshots/lvgl'
 output.mkdir(parents=True, exist_ok=True)
-names = {'boot': '启动画面', 'home': '数字表盘', 'analog': '指针表盘', 'drawer': '应用抽屉',
+names = {'boot': '启动画面', 'home': '数字表盘', 'analog': '指针表盘', 'unlock-drag': '锁屏上划', 'drawer': '应用抽屉',
          'clock': '首次下拉', 'control': '控制中心', 'settings': '系统设置',
          'wifi': 'Wi-Fi 设置', 'ap': 'AP 配网', 'faces': '表盘样式', 'stopwatch': '秒表', 'stopwatch-records': '计圈记录',
          'camera-scan': '选择相机', 'camera-modes': '遥控模式', 'camera-photo': '拍照遥控', 'camera-movie': '录像遥控'}

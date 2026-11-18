@@ -1,0 +1,165 @@
+{
+  "source": "https://hyperos.mi.com/font/download",
+  "source_directory": "reference/MiSans/ttf",
+  "static_symbols": "·：，。％°？‹›−~晴多云阴少阵雷雨夹雪冻冰雹暴大中小毛雾霾沙尘扬浮强热带极特",
+  "fonts": [
+    {
+      "name": "toolbox_misans_18",
+      "source": "MiSans-Regular.ttf",
+      "size": 18,
+      "weight": "Regular",
+      "coverage": "ascii",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_18.c",
+      "use": "控制中心数值和天气键盘"
+    },
+    {
+      "name": "toolbox_misans_20",
+      "source": "MiSans-Regular.ttf",
+      "size": 20,
+      "weight": "Regular",
+      "coverage": "dynamic-cn",
+      "bpp": 2,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_20.c",
+      "use": "动态中文、表盘与设置"
+    },
+    {
+      "name": "toolbox_misans_22",
+      "source": "MiSans-Regular.ttf",
+      "size": 22,
+      "weight": "Regular",
+      "coverage": "ascii",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_22.c",
+      "use": "控制中心电量、设置选项"
+    },
+    {
+      "name": "toolbox_misans_23",
+      "source": "MiSans-Regular.ttf",
+      "size": 23,
+      "weight": "Regular",
+      "coverage": "static-cn",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_23.c",
+      "use": "按钮、状态与应用交互"
+    },
+    {
+      "name": "toolbox_misans_24",
+      "source": "MiSans-Regular.ttf",
+      "size": 24,
+      "weight": "Regular",
+      "coverage": "ascii",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_24.c",
+      "use": "控制中心时间"
+    },
+    {
+      "name": "toolbox_misans_25",
+      "source": "MiSans-Regular.ttf",
+      "size": 25,
+      "weight": "Regular",
+      "coverage": "static-cn",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_25.c",
+      "use": "锁屏日期"
+    },
+    {
+      "name": "toolbox_misans_26",
+      "source": "MiSans-Semibold.ttf",
+      "size": 26,
+      "weight": "Semibold",
+      "coverage": "dynamic-cn",
+      "bpp": 2,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_26.c",
+      "use": "动态城市、天气与中文标题"
+    },
+    {
+      "name": "toolbox_misans_28",
+      "source": "MiSans-Regular.ttf",
+      "size": 28,
+      "weight": "Regular",
+      "coverage": "static-cn",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_28.c",
+      "use": "界面正文"
+    },
+    {
+      "name": "toolbox_misans_32",
+      "source": "MiSans-Semibold.ttf",
+      "size": 32,
+      "weight": "Semibold",
+      "coverage": "ascii",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_32.c",
+      "use": "开机标题"
+    },
+    {
+      "name": "toolbox_misans_36",
+      "source": "MiSans-Regular.ttf",
+      "size": 36,
+      "weight": "Regular",
+      "coverage": "static-cn",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_36.c",
+      "use": "表盘刻度、数字和天气温度范围"
+    },
+    {
+      "name": "toolbox_misans_65",
+      "source": "MiSans-Regular.ttf",
+      "size": 65,
+      "weight": "Regular",
+      "coverage": "symbols",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_65.c",
+      "use": "天气温度、计数器大数字",
+      "symbols": "0123456789:.-°~"
+    },
+    {
+      "name": "toolbox_misans_98",
+      "source": "MiSans-Semibold.ttf",
+      "size": 98,
+      "weight": "Semibold",
+      "coverage": "symbols",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_98.c",
+      "use": "锁屏时间、计数器",
+      "symbols": "0123456789:.-°~"
+    },
+    {
+      "name": "toolbox_misans_semibold_36",
+      "source": "MiSans-Semibold.ttf",
+      "size": 36,
+      "weight": "Semibold",
+      "coverage": "symbols",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_semibold_36.c",
+      "use": "一级下拉时钟",
+      "symbols": "0123456789:"
+    },
+    {
+      "name": "toolbox_misans_semibold_65",
+      "source": "MiSans-Semibold.ttf",
+      "size": 65,
+      "weight": "Semibold",
+      "coverage": "symbols",
+      "bpp": 4,
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_semibold_65.c",
+      "use": "水平仪大数字",
+      "symbols": "0123456789.°-"
+    }
+  ]
+}

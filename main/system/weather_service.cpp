@@ -3,12 +3,13 @@
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#include <esp_pthread.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
 
 #include <algorithm>
-#include <chrono>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -115,7 +116,20 @@ void save_cache(const WeatherResult &result) {
     Settings settings("weather", true);
     settings.SetString("cache", json_string(root.get()));
 }
+std::atomic<bool> transport_busy{false};
 } // namespace
+
+struct WeatherService::Request {
+    std::string query;
+    WeatherCity city;
+    WeatherResult next;
+    std::atomic<bool> cancelled{false}, finished{false};
+    bool started = false; // Foreground only.
+    bool cache = false;
+    void run();
+    std::string get(const std::string& url);
+};
+
 WeatherService::WeatherService() {
     Settings settings("weather");
     auto root = parse(settings.GetString("cache"));
@@ -152,19 +166,23 @@ WeatherService::WeatherService() {
     result_.message = "选择城市";
 }
 WeatherService::~WeatherService() {
-    stop();
+    if (request_) request_->cancelled.store(true, std::memory_order_release);
 }
-void WeatherService::stop() {
-    cancelled_ = true;
-    if (worker_.joinable())
-        worker_.join();
-}
+
 WeatherResult WeatherService::snapshot() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    start_pending();
+    if (request_ && request_->finished.load(std::memory_order_acquire)) {
+        auto request = std::move(request_);
+        if (request->cache) save_cache(request->next);
+        request->next.busy = false;
+        request->next.revision = result_.revision + 1;
+        result_ = std::move(request->next);
+    }
     return result_;
 }
-std::string WeatherService::request(const std::string &url) {
-    if (cancelled_)
+
+std::string WeatherService::Request::get(const std::string &url) {
+    if (cancelled)
         return {};
     esp_http_client_config_t config = {};
     config.url = url.c_str();
@@ -173,14 +191,15 @@ std::string WeatherService::request(const std::string &url) {
     config.buffer_size = 2048;
     config.disable_auto_redirect = true;
     struct Response {
+        const std::atomic<bool>& cancelled;
         std::string body;
         bool overflow = false;
-    } response;
+    } response{cancelled, {}};
     config.is_async = true;
     config.user_data = &response;
     config.event_handler = [](esp_http_client_event_t *event) -> esp_err_t {
         auto *response = static_cast<Response *>(event->user_data);
-        if (event->event_id == HTTP_EVENT_ON_DATA) {
+        if (event->event_id == HTTP_EVENT_ON_DATA && !response->cancelled) {
             if (response->body.size() + event->data_len > 65536) {
                 response->overflow = true;
                 return ESP_FAIL;
@@ -198,101 +217,107 @@ std::string WeatherService::request(const std::string &url) {
         status = esp_http_client_perform(client);
         if (status != ESP_ERR_HTTP_EAGAIN)
             break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    } while (!cancelled_ && !response.overflow && esp_timer_get_time() < deadline);
+        if (!cancelled) vTaskDelay(pdMS_TO_TICKS(20));
+    } while (!cancelled && !response.overflow && esp_timer_get_time() < deadline);
     const bool success = status == ESP_OK && esp_http_client_get_status_code(client) == 200 && !response.overflow;
     ESP_LOGI("Weather", "UAPI direct HTTPS result=%s, HTTP=%d, bytes=%u", esp_err_to_name(status),
              esp_http_client_get_status_code(client), static_cast<unsigned>(response.body.size()));
+    // The worker owns the HTTP handle through DNS, TLS and cleanup.
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    return cancelled_ || !success ? std::string{} : response.body;
+    return cancelled || !success ? std::string{} : response.body;
 }
 void WeatherService::search(const std::string &query) {
     launch(query, {});
 }
 void WeatherService::refresh(const WeatherCity &city) {
-    if (!finished_)
-        return;
-    {
+    if (request_) return;
+    if (result_.city.id != city.id) {
         Settings settings("weather", true);
         Json p(city_json(city), cJSON_Delete);
         settings.SetString("city", json_string(p.get()));
-    }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (result_.city.id != city.id)
-            result_.days = {};
+        result_.days = {};
         result_.city = city;
     }
     launch({}, city);
 }
+
 void WeatherService::launch(const std::string &query, const WeatherCity &city) {
-    if (!finished_)
-        return;
-    if (worker_.joinable())
-        worker_.join();
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!GetHAL().getWifiStatus().connected) {
-            result_.message = "离线缓存";
-            ++result_.revision;
-            return;
-        }
-        result_.busy = true;
-        result_.message = "正在更新";
-        result_.cities.clear();
+    if (request_) return;
+    if (!GetHAL().getWifiStatus().connected) {
+        result_.message = "离线缓存";
         ++result_.revision;
+        return;
     }
-    cancelled_ = false;
-    finished_ = false;
-    auto config = esp_pthread_get_default_config();
-    config.stack_size = 12288;
-    config.prio = 2;
-    config.thread_name = "weather";
-    esp_pthread_set_cfg(&config);
-    worker_ = std::thread([this, query, city] {
-        auto next = snapshot();
-        auto domestic =
-            parse(request("https://uapis.cn/api/v1/misc/weather?" + std::string(query.empty() ? "adcode=" : "city=") +
-                          encode(query.empty() ? city.id : query) + "&lang=zh&extended=true&forecast=true"));
-        if (!query.empty()) {
-            if (cJSON_IsNumber(field(domestic.get(), "temperature")) && !str(domestic.get(), "adcode").empty()) {
-                WeatherCity found;
-                found.id = str(domestic.get(), "adcode");
-                found.name = str(domestic.get(), "city");
-                found.province = str(domestic.get(), "province");
-                found.timezone = "Asia/Shanghai";
-                next.cities = {found};
-            }
-            next.message = next.cities.empty() ? "未找到城市或网络不可用" : "选择城市";
-        } else {
-            if (next.city.id != city.id)
-                next.days = {};
-            next.city = city;
-            for (int i = 0; i < 2; ++i) {
-                const auto expected = date(28800, i);
-                if (next.days[i].date != expected)
-                    next.days[i] = {};
-                next.days[i].date = expected;
-            }
-            time_t now = std::time(nullptr) + 28800;
-            std::tm local = {};
-            gmtime_r(&now, &local);
-            const bool success = str(domestic.get(), "adcode") == city.id &&
-                                 decode_weather(next, domestic.get(), local.tm_hour * 60 + local.tm_min);
-            if (success && !str(domestic.get(), "city").empty()) next.city.name = str(domestic.get(), "city");
-            next.message = success ? "更新完成" : "请求失败，显示缓存";
-            next.cached = !success;
-            if (!cancelled_ && success)
-                save_cache(next);
+    result_.busy = true;
+    result_.message = "正在更新";
+    result_.cities.clear();
+    ++result_.revision;
+    request_ = std::make_shared<Request>();
+    request_->query = query;
+    request_->city = city;
+    request_->next = result_;
+    start_pending();
+}
+
+void WeatherService::start_pending() {
+    if (!request_ || request_->started || transport_busy.exchange(true)) return;
+    auto* payload = new std::shared_ptr<Request>(request_);
+    const auto created = xTaskCreate([](void* argument) {
+        {
+            std::unique_ptr<std::shared_ptr<Request>> job(static_cast<std::shared_ptr<Request>*>(argument));
+            (*job)->run();
         }
-        if (!cancelled_) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            next.busy = false;
-            next.revision = result_.revision + 1;
-            result_ = std::move(next);
+        transport_busy.store(false);
+        vTaskDelete(nullptr);
+    }, "weather", 12288, payload, 2, nullptr);
+    if (created != pdPASS) {
+        delete payload;
+        request_.reset();
+        transport_busy.store(false);
+        result_.busy = false;
+        result_.message = "请求失败，显示缓存";
+        ++result_.revision;
+        return;
+    }
+    request_->started = true;
+}
+
+void WeatherService::Request::run() {
+    auto domestic =
+        parse(get("https://uapis.cn/api/v1/misc/weather?" + std::string(query.empty() ? "adcode=" : "city=") +
+                      encode(query.empty() ? city.id : query) + "&lang=zh&extended=true&forecast=true"));
+    if (cancelled) return;
+    if (!query.empty()) {
+        if (cJSON_IsNumber(field(domestic.get(), "temperature")) && !str(domestic.get(), "adcode").empty()) {
+            WeatherCity found;
+            found.id = str(domestic.get(), "adcode");
+            found.name = str(domestic.get(), "city");
+            found.province = str(domestic.get(), "province");
+            found.timezone = "Asia/Shanghai";
+            next.cities = {found};
         }
-        finished_ = true;
-    });
+        next.message = next.cities.empty() ? "未找到城市或网络不可用" : "选择城市";
+    } else {
+        if (next.city.id != city.id)
+            next.days = {};
+        next.city = city;
+        for (int i = 0; i < 2; ++i) {
+            const auto expected = date(28800, i);
+            if (next.days[i].date != expected)
+                next.days[i] = {};
+            next.days[i].date = expected;
+        }
+        time_t now = std::time(nullptr) + 28800;
+        std::tm local = {};
+        gmtime_r(&now, &local);
+        const bool success = str(domestic.get(), "adcode") == city.id &&
+                             decode_weather(next, domestic.get(), local.tm_hour * 60 + local.tm_min);
+        if (success && !str(domestic.get(), "city").empty()) next.city.name = str(domestic.get(), "city");
+        next.message = success ? "更新完成" : "请求失败，显示缓存";
+        next.cached = !success;
+        cache = success;
+    }
+    finished.store(true, std::memory_order_release);
 }
 } // namespace toolbox

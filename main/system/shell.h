@@ -6,6 +6,7 @@ namespace toolbox {
 // Called with the LVGL mutex held. The shell's overlays outlive foreground Apps.
 void shell_init();
 void shell_attach(lv_obj_t* drawer);
+void shell_drawer_settled(lv_obj_t* drawer);
 void shell_detach();
 bool shell_touch(bool pressed, int x, int y, uint32_t sample_tick = UINT32_MAX, bool draw = true);
 void shell_cancel_touch();

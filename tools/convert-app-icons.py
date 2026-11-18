@@ -1,16 +1,18 @@
-"""Encode the approved 150-pixel launcher PNGs as native LVGL RGB565 assets."""
+"""Encode launcher PNGs at their displayed size as native LVGL RGB565 assets."""
 from pathlib import Path
 
 from PIL import Image
 
 root = Path(__file__).resolve().parent.parent
 names = ("stopwatch", "settings", "camera", "counter", "timers", "focus", "level", "weather")
+display_size = 166
 output = ['#include <lvgl.h>', '']
 declarations = ['#pragma once', '#include <lvgl.h>', '#ifdef __cplusplus', 'extern "C" {', '#endif']
 for name in names:
     image = Image.open(root / "output/app-icons" / f"{name}.png").convert("RGB")
     if image.size != (150, 150):
         raise ValueError(f"{name} must be exactly 150 x 150 pixels")
+    image = image.resize((display_size, display_size), Image.Resampling.BILINEAR)
     data = bytearray()
     for red, green, blue in image.getdata():
         pixel = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
@@ -23,7 +25,7 @@ for name in names:
         "};",
         f"const lv_image_dsc_t {symbol} = {{",
         "    .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RGB565,",
-        "               .w = 150, .h = 150, .stride = 300},",
+        f"               .w = {display_size}, .h = {display_size}, .stride = {display_size * 2}}},",
         f"    .data_size = {len(data)}, .data = {symbol}_pixels",
         "};", "",
     ])

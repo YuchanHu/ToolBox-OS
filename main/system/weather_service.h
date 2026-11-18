@@ -1,9 +1,7 @@
 #pragma once
 #include <array>
-#include <atomic>
-#include <mutex>
+#include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace toolbox {
@@ -33,12 +31,10 @@ class WeatherService {
     WeatherResult snapshot();
 
   private:
-    std::mutex mutex_;
+    struct Request;
     WeatherResult result_;
-    std::thread worker_;
-    std::atomic<bool> cancelled_{false}, finished_{true};
-    std::string request(const std::string &path);
+    std::shared_ptr<Request> request_;
     void launch(const std::string &query, const WeatherCity &city);
-    void stop();
+    void start_pending();
 };
 } // namespace toolbox

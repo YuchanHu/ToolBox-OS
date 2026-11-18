@@ -1,6 +1,12 @@
 file(GLOB_RECURSE MY_SRCS
     "apps/app_camera/*.cpp"
-    "apps/app_extensions/*.cpp"
+    "apps/app_counter/*.cpp"
+    "apps/app_timers/*.cpp"
+    "apps/app_focus/*.cpp"
+    "apps/app_level/*.cpp"
+    "apps/app_weather/*.cpp"
+    "apps/common/countdown/*.cpp"
+    "apps/common/ui/*.cpp"
     "apps/app_launcher/*.cpp"
     "apps/app_stopwatch/model/*.cpp"
     "apps/common/audio/*.cpp"

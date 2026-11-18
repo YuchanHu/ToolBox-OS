@@ -5,6 +5,7 @@
 #include "camera_remote.h"
 #include <hal/utils/settings/settings.h>
 #include <hal/hal.h>
+#include <hal/refresh_metrics.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
 #include <smooth_ui_toolkit.hpp>
@@ -35,7 +36,7 @@ void Runtime::init()
         shell_init();
     }
     install_apps();
-    ESP_LOGI("ToolBox", "1.0 foundation ready; internal free=%u, PSRAM free=%u",
+    ESP_LOGI("ToolBox", "1.1 ready; internal free=%u, PSRAM free=%u",
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
 }
@@ -48,8 +49,26 @@ bool Runtime::post(Command command)
 void Runtime::update()
 {
     // Bound work per iteration so queued controls cannot starve app updates.
+    Command brightness{CommandType::Brightness, -1, false};
+    Command volume{CommandType::Volume, -1, false};
+    auto apply_levels = [&] {
+        if (brightness.value >= 0)
+            GetHAL().setBackLightBrightness(brightness.value, brightness.save);
+        if (volume.value >= 0)
+            GetHAL().setSpeakerVolume(volume.value, volume.save);
+        brightness.value = volume.value = -1;
+        brightness.save = volume.save = false;
+    };
     Command command;
     for (int count = 0; count < 16 && xQueueReceive(commands_, &command, 0) == pdTRUE; ++count) {
+        if (command.type == CommandType::Brightness || command.type == CommandType::Volume) {
+            auto& level = command.type == CommandType::Brightness ? brightness : volume;
+            if (level.save && !command.save) apply_levels();
+            level.value = command.value;
+            level.save |= command.save;
+            continue;
+        }
+        apply_levels();
         switch (command.type) {
         case CommandType::HomeTimeout:
         case CommandType::PowerTimeout: {
@@ -68,21 +87,23 @@ void Runtime::update()
             GetHAL().setWifiEnabled(command.value != 0, command.save);
             break;
         case CommandType::Brightness:
-            GetHAL().setBackLightBrightness(command.value, command.save);
+        case CommandType::Volume:
             break;
         case CommandType::Face: {
             Settings settings("toolbox", true);
             settings.SetInt("analog", command.value);
             break;
         }
-        case CommandType::Volume:
-            GetHAL().setSpeakerVolume(command.value, command.save);
-            break;
         }
     }
+    apply_levels();
     GetHAL().feedTheDog();
     camera::tick();
     mooncake::GetMooncake().update();
+#ifdef CONFIG_TOOLBOX_PERF
+    auto& display = GetHAL().getDisplay();
+    perf::report(display.width() * display.height());
+#endif
     static uint32_t last_shutdown_attempt = 0;
     const uint32_t now = GetHAL().millis();
     if (shell_power_timeout() && shell_idle_ms() >= static_cast<uint32_t>(shell_power_timeout()) * 1000 &&

@@ -1,6 +1,13 @@
 #include "ui.h"
+#include <cstring>
 
 namespace toolbox::ui {
+bool set_text(lv_obj_t* label, const char* value)
+{
+    if (std::strcmp(lv_label_get_text(label), value) == 0) return false;
+    lv_label_set_text(label, value);
+    return true;
+}
 namespace {
 void center_cap_height(lv_obj_t* label, const lv_font_t* font)
 {
@@ -132,11 +139,18 @@ lv_obj_t* charging_icon(lv_obj_t* parent, uint32_t color)
 void battery_level(lv_obj_t* object, int percent, uint32_t color)
 {
     percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
-    lv_obj_set_style_border_color(lv_obj_get_child(object, 0), lv_color_hex(color), 0);
-    lv_obj_set_style_bg_color(lv_obj_get_child(object, 1), lv_color_hex(color), 0);
+    auto* body = lv_obj_get_child(object, 0);
+    auto* cap = lv_obj_get_child(object, 1);
     auto* fill = lv_obj_get_child(object, 2);
-    lv_obj_set_width(fill, 14 * percent / 100);
+    const auto shade = lv_color_hex(color);
+    if (!lv_color_eq(lv_obj_get_style_border_color(body, LV_PART_MAIN), shade))
+        lv_obj_set_style_border_color(body, shade, 0);
+    if (!lv_color_eq(lv_obj_get_style_bg_color(cap, LV_PART_MAIN), shade))
+        lv_obj_set_style_bg_color(cap, shade, 0);
+    if (lv_obj_get_style_width(fill, LV_PART_MAIN) != 14 * percent / 100)
+        lv_obj_set_width(fill, 14 * percent / 100);
     lv_obj_set_flag(fill, LV_OBJ_FLAG_HIDDEN, percent == 0);
-    lv_obj_set_style_bg_color(fill, lv_color_hex(color), 0);
+    if (!lv_color_eq(lv_obj_get_style_bg_color(fill, LV_PART_MAIN), shade))
+        lv_obj_set_style_bg_color(fill, shade, 0);
 }
 }

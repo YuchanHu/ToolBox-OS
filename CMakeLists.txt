@@ -4,5 +4,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/main/assets/provision.html"
                "${CMAKE_CURRENT_SOURCE_DIR}/components/esp-wifi-connect/assets/wifi_configuration.html"
                COPYONLY)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(ToolBoxOS VERSION 1.0.0)
+if(NOT DEFINED ENV{IDF_PATH} OR NOT EXISTS "$ENV{IDF_PATH}/tools/cmake/project.cmake")
+    message(FATAL_ERROR "ESP-IDF not found. Export the ESP-IDF 5.5.5 environment before configuring.")
+endif()
+include("$ENV{IDF_PATH}/tools/cmake/project.cmake")
+project(ToolBoxOS VERSION 1.1.0)

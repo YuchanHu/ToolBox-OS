@@ -304,9 +304,27 @@ void ExtensionView::confirmation() {
 }
 
 void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
-    const bool level_changed = !built_ || state.valid != state_.valid || state.angle != state_.angle ||
-                               state.direction != state_.direction || state.error != state_.error ||
-                               state.pin != state_.pin || state.tolerance != state_.tolerance;
+    const auto level_on_target = [](const ExtensionViewState& value) {
+        return value.valid && value.error <= value.tolerance;
+    };
+    const auto arrow_step = [](double direction) { return std::lround(direction * 4); };
+    const bool refresh_level = !built_ || state.page != state_.page || state.pin != state_.pin || state.valid != state_.valid;
+    const bool level_changed = kind_ == Extension::Level && (refresh_level ||
+        level_on_target(state) != level_on_target(state_) ||
+        (state.valid && !level_on_target(state) && arrow_step(state.direction) != arrow_step(state_.direction)));
+    if (kind_ == Extension::Level && state.valid) {
+        const double readings[] = {state.angle, state.x, state.y};
+        for (unsigned i = 0; i < level_display_.size(); ++i) {
+            // One extra centidegree of hysteresis beyond the rounding boundary.
+            // The underlying measurement and on-target threshold stay unrounded.
+            if (refresh_level || std::abs(readings[i] * 100 - level_display_[i]) >= 1.5)
+                level_display_[i] = std::lround(readings[i] * 100);
+        }
+    }
+    const auto& next_day = state.weather.days[state.day];
+    const auto& old_day = state_.weather.days[state_.day];
+    const bool weather_changed = !built_ || state.page != state_.page || state.day != state_.day ||
+        next_day.valid != old_day.valid || next_day.code != old_day.code || next_day.night != old_day.night;
     state_ = state;
     if (!built_ || built_page_ != state.page) {
         built_page_ = state.page;
@@ -322,12 +340,16 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
         if (age >= 2300)
             lv_obj_add_flag(controls_, LV_OBJ_FLAG_HIDDEN);
         else
-            lv_obj_set_style_opa(controls_, age <= 2000 ? 255 : 255 * (2300 - age) / 300, 0);
+        {
+            const auto opacity = age <= 2000 ? 255 : 255 * (2300 - age) / 300;
+            if (lv_obj_get_style_opa(controls_, LV_PART_MAIN) != opacity)
+                lv_obj_set_style_opa(controls_, opacity, 0);
+        }
     }
     if (state.page == ExtensionPage::Main) {
         if (kind_ == Extension::Counter) {
-            label(time_, std::to_string(state.count));
-            lv_obj_align(time_, LV_ALIGN_CENTER, 0, 0);
+            if (ui::set_text(time_, std::to_string(state.count).c_str()))
+                lv_obj_align(time_, LV_ALIGN_CENTER, 0, 0);
             const auto *font = state.count < 100000      ? &toolbox_misans_98
                                : state.count < 100000000 ? &toolbox_misans_65
                                                          : &toolbox_misans_36;
@@ -336,7 +358,8 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
         } else if (kind_ == Extension::Timers || kind_ == Extension::Focus) {
             label(time_, state.time);
             label(detail_, state.detail);
-            lv_arc_set_value(ring_, std::clamp(static_cast<int>(state.progress * 1000), 0, 1000));
+            const auto progress = std::clamp(static_cast<int>(state.progress * 1000), 0, 1000);
+            if (lv_arc_get_value(ring_) != progress) lv_arc_set_value(ring_, progress);
             const char *action = state.timer == Countdown::State::Running  ? "暂停"
                                  : state.timer == Countdown::State::Paused ? "继续"
                                  : state.timer == Countdown::State::Done   ? "再来一次"
@@ -345,7 +368,7 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
                 action = state.timer == Countdown::State::Running ? "退出专注" : state.rest ? "开始休息" : "开始";
             label(lv_obj_get_child(primary_, 0), action);
         } else if (kind_ == Extension::Level) {
-            label(time_, state.valid ? number(state.angle) + "°" : "--.--°");
+            label(time_, state.valid ? number(level_display_[0] / 100.) + "°" : "--.--°");
             label(message_, state.frozen ? "HOLD" : state.pin ? "PIN " + number(state.target) + "°" : "PINPOINT");
             auto signed_angle = [](double value) {
                 char text[24];
@@ -353,7 +376,7 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
                 return std::string(text);
             };
             label(detail_,
-                  state.valid ? "X " + signed_angle(state.x) + "°   Y " + signed_angle(state.y) + "°" : state.message);
+                  state.valid ? "X " + signed_angle(level_display_[1] / 100.) + "°   Y " + signed_angle(level_display_[2] / 100.) + "°" : state.message);
         } else {
             const auto &day = state.weather.days[state.day];
             label(message_, state.weather.city.name.empty() ? "请在配网时配置城市" : state.weather.city.name);
@@ -433,8 +456,9 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
         label(message_, "已完成专注");
         label(detail_, std::to_string(state.completed) + " 次");
     }
-    const bool animated_weather = kind_ == Extension::Weather && state.weather.days[state.day].valid;
-    if (drawing_ && now - frame_at_ >= 33 && (level_changed || animated_weather)) {
+    const bool animated_weather = next_day.valid && (next_day.night || (next_day.code != 100 && next_day.code != 150));
+    if (drawing_ && (level_changed || (kind_ == Extension::Weather &&
+                    (weather_changed || (animated_weather && now - frame_at_ >= 33))))) {
         frame_at_ = now;
         lv_obj_invalidate(drawing_);
     }

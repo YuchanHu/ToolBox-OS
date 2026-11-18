@@ -1,0 +1,36 @@
+menu "ToolBox OS"
+
+config TOOLBOX_PERF
+    bool "Collect Refresh performance metrics"
+    default n
+    help
+        Print fixed-size aggregate statistics every five seconds.
+
+choice TOOLBOX_DMA_STRIP
+    prompt "Display DMA staging strip height"
+    default TOOLBOX_DMA_8
+config TOOLBOX_DMA_8
+    bool "8 rows"
+config TOOLBOX_DMA_16
+    bool "16 rows"
+config TOOLBOX_DMA_24
+    bool "24 rows"
+config TOOLBOX_DMA_32
+    bool "32 rows"
+endchoice
+
+config TOOLBOX_DMA_ROWS
+    int
+    default 16 if TOOLBOX_DMA_16
+    default 24 if TOOLBOX_DMA_24
+    default 32 if TOOLBOX_DMA_32
+    default 8
+
+config TOOLBOX_TOUCH_FAST_I2C
+    bool "Evaluate CST820 at 400 kHz"
+    default n
+    help
+        Changes only the CST820 device speed. Validate shared-bus operation
+        on the board before enabling this in production.
+
+endmenu
