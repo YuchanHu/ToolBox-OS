@@ -36,7 +36,7 @@ void Runtime::init()
         shell_init();
     }
     install_apps();
-    ESP_LOGI("ToolBox", "1.1 ready; internal free=%u, PSRAM free=%u",
+    ESP_LOGI("ToolBox", "1.2 ready; internal free=%u, PSRAM free=%u",
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
 }

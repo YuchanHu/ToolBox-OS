@@ -1,4 +1,4 @@
-# ToolBox OS 1.1
+# ToolBox OS 1.2.0
 
 ToolBox OS 是 M5Stack StopWatch 上的圆屏工具固件。它使用统一的 MiSans 界面和双键操作，用于计时、计数、测量和相机遥控等短时任务。普通应用随前台生命周期运行，控制中心可覆盖页面并保留当前应用。
 
@@ -17,9 +17,21 @@ ToolBox OS 是 M5Stack StopWatch 上的圆屏工具固件。它使用统一的 M
 | 倒计时 | 预设、自定义时分秒、启停与到期提醒 |
 | 番茄钟 | 专注、短休和长休、退出确认与完成次数 |
 | 水平仪 | 双轴倾角、180° 校准、相对置零、冻结、PIN 方向与声音引导 |
-| 天气 | 城市搜索与保存、今日明日、天气动画与日期缓存 |
+| 天气 | 自动定位或指定城市、下拉刷新、逐小时趋势及最多七天预报、天气动画与离线缓存 |
 
-从锁屏上划进入抽屉，短距离拖动可回弹，快速上甩可解锁。抽屉横滑循环吸附，KEYA 和 KEYB 分别切换上一项和下一项。顶部第一次下拉显示时间和电量，1.5 秒内再次下拉打开控制中心。控制中心上划回到原页面。各应用的按键见 [五应用说明](docs/FIVE_APPS.md)。
+## 系统操作
+
+- 在表盘上划，或单击 KEYA 或 KEYB，进入应用抽屉。横滑切换应用，也可用 KEYA 和 KEYB 分别选择上一项和下一项。最近使用的应用排在最前，完整顺序保存在 NVS，重启后恢复。
+- 从屏幕顶部下拉一次显示时间和电量，在 1.5 秒内再次下拉打开控制中心。上划关闭控制中心，回到原页面。
+- 接入外部电源时，电量旁会持续显示闪电。电池充满显示 100% 后，闪电保留到断开电源。
+
+## Sony 相机遥控
+
+通过 BLE 扫描并连接相机，选择拍照或录像。拍照使用 KEYB。绿色外环表示录像就绪，即使相机尚未发送过录像状态，按 KEYB 也可开始录像。连接过程使用蓝色，录像中使用较厚的红色外环，保留黑色背景。
+
+录像界面显示设备时间、电量和录像时长。时长显示延后 500 毫秒，以贴近相机计时。录像期间锁定触摸并隐藏返回按钮，按 KEYB 停止录像后即可返回。页面只在状态、计时、电量或时间发生变化时更新。
+
+各工具应用的按键见[五应用说明](docs/FIVE_APPS.md)。
 
 ## 架构与目录
 
@@ -36,23 +48,31 @@ docs/         构建、交互、架构与性能验收记录
 
 Refresh V6 通过 LVGL DIRECT 双缓冲、内部 RAM DMA 条带与 CO5300 TE 同步输出。触摸每 4ms 独立采样，移动事件合并，按下、抬起和取消保序。面板繁忙时仅暂停新一轮绘制。见 [架构](docs/ARCHITECTURE.md) 和 [性能验收](docs/PERFORMANCE.md)。
 
-## 构建和预览
+## 构建与刷写
 
 在已导出 ESP-IDF 5.5.5 的终端执行以下命令，从串口列表选择开发板对应端口。
 
 ```bash
 idf.py -B build-toolbox build
-idf.py -B build-toolbox -p PORT flash monitor
 ```
 
-Windows 可运行 `./tools/build.ps1`。桌面渲染用 `tools/ui-render/build.cmd` 构建，在仓库根目录运行 `build-ui-render/render.exe`，再运行 `python tools/ui-render/export.py` 和 `python tools/ui-render/export_extensions.py`。字体生成使用 `npm ci --prefix tools/font-converter` 和 `python tools/generate-fonts.py`。参数、依赖及输出见 [构建指南](docs/BUILD.md)。
+Windows 可运行 `./tools/build.ps1`。应用固件输出到 `build-toolbox/ToolBoxOS.bin`，完整 USB 刷写使用同目录生成的 `flash_args`。
+
+- 已使用 1.2 单 Factory 分区的设备可运行 `idf.py -B build-toolbox -p PORT app-flash monitor` 更新应用。
+- 从 1.1 升级前先备份文件和 NVS。Storage 从 `0xA00000` 移至 `0xBF0000`，请按文档步骤写入新固件并恢复 FAT。新设备也可按文档步骤初始化空卷。[迁移与 USB 刷写步骤](docs/BUILD.md)
+
+## 界面预览
+
+桌面渲染用 `tools/ui-render/build.cmd` 构建。在仓库根目录运行 `build-ui-render/render.exe`，再运行 `python tools/ui-render/export.py` 和 `python tools/ui-render/export_extensions.py` 导出截图。构建依赖、字体生成方法和输出路径见[构建指南](docs/BUILD.md)。
 
 - [系统同源 LVGL 截图](ui-preview/screenshots/lvgl/overview.png)
+- [应用抽屉](ui-preview/screenshots/lvgl/drawer.png)
+- [拍照遥控](ui-preview/screenshots/lvgl/camera-photo.png)和[录像遥控](ui-preview/screenshots/lvgl/camera-movie.png)
 - [五应用同源 LVGL 截图](ui-preview/five-apps/actual/overview.png)
 - [已确认浏览器原型](ui-preview/index.html)
 
 ## 验证与许可
 
-固件交叉编译和桌面回归覆盖范围见 [性能验收](docs/PERFORMANCE.md)。V5 串口已采集单个刷新窗口。V6 的显示、触摸、无线、音频、天气网络和 IMU 实机回归及两版操作场景对比待完成。
+1.2 已在 StopWatch 上完成 USB 分区迁移并挂载恢复的 FAT。构建结果、八个应用的测试范围及仍需手动验证的项目见 [1.2 整改报告](docs/REMEDIATION-1.2.md)。显示采样方法及结果见 [性能验收](docs/PERFORMANCE.md)。
 
 项目许可见 [LICENSE](LICENSE)。第三方组件沿用各自目录内的版权和许可文件。固定版本及补丁见 [repos.json](repos.json)、[dependencies.lock](dependencies.lock) 和 [patches](patches/)。界面使用小米 MiSans 字体，许可见 [MiSans 官方下载与协议](https://hyperos.mi.com/font/download)。官方固件参考起点见 [开发记录](docs/CHANGELOG.md)。

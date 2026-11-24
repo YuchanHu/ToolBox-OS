@@ -14,6 +14,8 @@ public:
 private:
     std::unique_ptr<toolbox::CameraPage> view_;
     toolbox::CameraPage::Screen screen_ = toolbox::CameraPage::Screen::Modes;
-    uint32_t updated_at_ = 0;
+    uint32_t polled_at_ = 0;
+    uint32_t recording_activity_at_ = 0;
+    bool stopping_movie_ = false;
     input::KeyManager keys_;
 };

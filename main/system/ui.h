@@ -7,6 +7,9 @@ namespace toolbox::ui {
 constexpr uint32_t accent = 0x9dc6ff;
 constexpr int content_top = 144;
 lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, uint32_t color = 0, int radius = 0);
+lv_obj_t* scroll_panel(lv_obj_t* parent, int x, int y, int width, int height,
+                       uint32_t color = 0, int radius = 0);
+void cache_scroll_rows(lv_obj_t* viewport);
 lv_obj_t* text(lv_obj_t* parent, const char* value, int x, int y, int width,
                const lv_font_t* font = &toolbox_misans_28, uint32_t color = 0xf3f6fc);
 bool set_text(lv_obj_t* label, const char* text);
@@ -31,7 +34,7 @@ void heading(lv_obj_t* parent, const char* value, lv_event_cb_t back);
 lv_obj_t* boot(lv_obj_t* parent);
 lv_obj_t* row(lv_obj_t* parent, int x, int y, int width, int height, int gap = 12);
 lv_obj_t* row_text(lv_obj_t* parent, const char* value, const lv_font_t* font, uint32_t color = 0xf3f6fc);
-lv_obj_t* battery(lv_obj_t* parent, uint32_t color = 0xf3f6fc);
+lv_obj_t* battery(lv_obj_t* parent, uint32_t color = 0xf3f6fc, uint32_t charge_color = 0x9ce4bd);
 void battery_level(lv_obj_t* object, int percent, uint32_t color = 0xf3f6fc);
-lv_obj_t* charging_icon(lv_obj_t* parent, uint32_t color = 0xf3f6fc);
+bool battery_external_power(lv_obj_t* object, bool connected);
 }

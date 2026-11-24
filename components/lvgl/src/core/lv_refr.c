@@ -1042,6 +1042,24 @@ static void refr_configured_layer(lv_layer_t * layer)
         lv_draw_buf_clear(layer->draw_buf, &clear_area);
     }
 
+    /* An opaque overlay can cover the dirty area just like an opaque widget
+     * on the active screen. Start with the highest covering object. */
+    lv_obj_t * sys_layer = lv_display_get_layer_sys(disp_refr);
+    lv_obj_t * top_layer = lv_display_get_layer_top(disp_refr);
+    lv_obj_t * cover = lv_refr_get_top_obj(&layer->_clip_area, sys_layer);
+    if(cover) {
+        refr_obj_and_children(layer, cover);
+        LV_PROFILER_REFR_END;
+        return;
+    }
+    cover = lv_refr_get_top_obj(&layer->_clip_area, top_layer);
+    if(cover) {
+        refr_obj_and_children(layer, cover);
+        refr_obj_and_children(layer, sys_layer);
+        LV_PROFILER_REFR_END;
+        return;
+    }
+
     lv_obj_t * top_act_scr = NULL;
     lv_obj_t * top_prev_scr = NULL;
 
@@ -1077,9 +1095,8 @@ static void refr_configured_layer(lv_layer_t * layer)
         refr_obj_and_children(layer, top_act_scr);
     }
 
-    /*Also refresh top and sys layer unconditionally*/
-    refr_obj_and_children(layer, lv_display_get_layer_top(disp_refr));
-    refr_obj_and_children(layer, lv_display_get_layer_sys(disp_refr));
+    refr_obj_and_children(layer, top_layer);
+    refr_obj_and_children(layer, sys_layer);
 
     LV_PROFILER_REFR_END;
 }

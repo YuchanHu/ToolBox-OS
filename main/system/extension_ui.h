@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace toolbox {
-enum class ExtensionPage { Main, Presets, Custom, Settings, Calibration, City, Details, Stats };
+enum class ExtensionPage { Main, Presets, Custom, Settings, Calibration, City, Details, Hourly, Daily, Stats };
 enum class ExtensionAction {
     None,
     Back,
@@ -74,6 +74,11 @@ class ExtensionView {
     std::vector<lv_obj_t *> values_;
     ExtensionEvent pending_;
     uint32_t revealed_at_ = 0, frame_at_ = 0, city_revision_ = UINT32_MAX;
+    lv_obj_t *sky_ = nullptr, *pull_hint_ = nullptr;
+    lv_point_t pull_origin_{};
+    bool pulling_ = false;
+    std::vector<lv_point_precise_t> hourly_points_;
+    void forecast_page();
     int previous_day_ = 0;
     std::array<int, 3> level_display_{};
     static void event(lv_event_t *event);

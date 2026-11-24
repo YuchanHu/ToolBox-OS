@@ -661,9 +661,10 @@ static int32_t elastic_diff(lv_obj_t * scroll_obj, int32_t diff, int32_t scroll_
         lv_scroll_snap_t snap;
         snap = dir == LV_DIR_HOR ? lv_obj_get_scroll_snap_x(scroll_obj) : lv_obj_get_scroll_snap_y(scroll_obj);
 
-        /*Without snapping just scale down the diff when scrolled out*/
+        /*Resist movement farther outside the bounds. Returning from elastic
+         * overscroll still accepts single-pixel steps. */
         if(snap == LV_SCROLL_SNAP_NONE) {
-            if(scroll_end < 0 || scroll_start < 0) {
+            if((scroll_end < 0 && diff < 0) || (scroll_start < 0 && diff > 0)) {
                 /*Rounding*/
                 if(diff < 0) diff -= ELASTIC_SLOWNESS_FACTOR / 2;
                 if(diff > 0) diff += ELASTIC_SLOWNESS_FACTOR / 2;

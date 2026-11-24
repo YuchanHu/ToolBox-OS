@@ -12,9 +12,10 @@ set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${ROOT}/components/lvgl" lvgl)
-file(GLOB FONTS "${ROOT}/main/assets/fonts/toolbox_misans_*.c")
+file(GLOB FONTS CONFIGURE_DEPENDS "${ROOT}/main/assets/fonts/toolbox_misans_*.c")
 add_executable(render render.cpp extensions.cpp ${FONTS}
     "${ROOT}/main/assets/app_icons.c"
+    "${ROOT}/main/assets/boot_logo.c"
     "${ROOT}/main/assets/images/icon_indicator_left.c"
     "${ROOT}/main/assets/images/icon_indicator_right.c"
     "${ROOT}/main/system/weather_decode.cpp"
@@ -30,6 +31,7 @@ add_executable(render render.cpp extensions.cpp ${FONTS}
     "${ROOT}/main/system/touch_input.cpp" "${ROOT}/main/system/ui.cpp" "${ROOT}/main/system/shell.cpp"
     "${ROOT}/main/system/stopwatch_ui.cpp" "${ROOT}/main/system/camera_ui.cpp"
     "${ROOT}/main/apps/app_camera/app_camera.cpp" "${ROOT}/main/assets/ui_icons.c"
+    "${ROOT}/main/assets/camera_remote_icons.c"
     "${ROOT}/main/apps/app_launcher/view/view.cpp"
     "${ROOT}/main/apps/app_stopwatch/app_stopwatch.cpp"
     "${ROOT}/main/apps/app_stopwatch/model/stopwatch.cpp"

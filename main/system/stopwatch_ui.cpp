@@ -26,22 +26,23 @@ StopwatchPage::StopwatchPage(std::function<void()> back, std::function<void()> l
     lv_obj_add_event_cb(lv_obj_get_child(records_page_, 1), [](lv_event_t* e) {
         lv_obj_add_flag(static_cast<StopwatchPage*>(lv_event_get_user_data(e))->records_page_, LV_OBJ_FLAG_HIDDEN);
     }, LV_EVENT_CLICKED, this);
-    records_list_ = ui::panel(records_page_, 69, ui::content_top, 328, 232);
-    lv_obj_add_flag(records_list_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(records_list_, LV_DIR_VER);
+    records_list_ = ui::scroll_panel(records_page_, 69, ui::content_top, 328, 232);
     lv_obj_set_scrollbar_mode(records_list_, LV_SCROLLBAR_MODE_OFF);
+    ui::cache_scroll_rows(records_list_);
     lv_obj_add_flag(records_page_, LV_OBJ_FLAG_HIDDEN);
 }
 StopwatchPage::~StopwatchPage() { lv_obj_delete(root_); }
 void StopwatchPage::update(uint32_t elapsed, model::Stopwatch::State_t state, const std::vector<uint32_t>& laps)
 {
-    if (displayed_second_ != elapsed / 1000) {
-        displayed_second_ = elapsed / 1000;
-        lv_label_set_text_fmt(time_, "%02u:%02u", static_cast<unsigned>(elapsed / 60000), static_cast<unsigned>((elapsed / 1000) % 60));
-    }
-    if (displayed_fraction_ != (elapsed / 10) % 100) {
-        displayed_fraction_ = (elapsed / 10) % 100;
-        lv_label_set_text_fmt(fraction_, ".%02u", static_cast<unsigned>(displayed_fraction_));
+    if (lv_obj_has_flag(records_page_, LV_OBJ_FLAG_HIDDEN)) {
+        if (displayed_second_ != elapsed / 1000) {
+            displayed_second_ = elapsed / 1000;
+            lv_label_set_text_fmt(time_, "%02u:%02u", static_cast<unsigned>(elapsed / 60000), static_cast<unsigned>((elapsed / 1000) % 60));
+        }
+        if (displayed_fraction_ != (elapsed / 10) % 100) {
+            displayed_fraction_ = (elapsed / 10) % 100;
+            lv_label_set_text_fmt(fraction_, ".%02u", static_cast<unsigned>(displayed_fraction_));
+        }
     }
     if (!state_initialized_ || displayed_state_ != state) {
         state_initialized_ = true;

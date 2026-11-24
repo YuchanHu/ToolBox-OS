@@ -1,5 +1,6 @@
 #include "app_weather.h"
 #include <esp_timer.h>
+#include <ctime>
 #include <system/app_icons.h>
 
 namespace toolbox {
@@ -23,9 +24,10 @@ void AppWeather::onOpen() {
     state_ = {};
     weather_ = std::make_unique<WeatherService>();
     state_.weather = weather_->snapshot();
-    if (!state_.weather.city.id.empty())
+    const auto age = std::time(nullptr) - state_.weather.fetched_at;
+    if (!state_.weather.fetched_at || !state_.weather.forecast || age < 0 || age >= 7200)
         weather_->refresh(state_.weather.city);
-    refresh_due_ = esp_timer_get_time() + 1800000000LL;
+    refresh_due_ = esp_timer_get_time() + 7200000000LL;
     open_view(Extension::Weather, view_state());
 }
 
@@ -34,7 +36,7 @@ bool AppWeather::key_action(AppKey key, int64_t) {
         --state_.day;
         return true;
     }
-    if (key == AppKey::B && state_.day < 1) {
+    if (key == AppKey::B && state_.weather.forecast && state_.day + 1 < static_cast<int>(state_.weather.forecast->days.size())) {
         ++state_.day;
         return true;
     }
@@ -52,14 +54,20 @@ bool AppWeather::act(const ExtensionEvent& event, int64_t) {
         return true;
     }
     if (event.action == A::Edit) {
-        state_.page = P::Details;
+        state_.page = event.value == 1 ? P::Hourly : event.value == 2 ? P::Daily : P::Details;
         return true;
     }
-    if (event.action == A::Search && !event.text.empty() && !state_.weather.busy) {
+    if (event.action == A::Search && !state_.weather.busy) {
+        if (event.text.empty() || event.value == -1) {
+            weather_->refresh({});
+            state_.day = 0;
+            state_.page = P::Main;
+            return true;
+        }
         weather_->search(event.text);
         return true;
     }
-    if (event.action == A::Refresh && !state_.weather.city.id.empty() && !state_.weather.busy) {
+    if (event.action == A::Refresh && !state_.weather.busy) {
         weather_->refresh(state_.weather.city);
         return true;
     }
@@ -71,9 +79,10 @@ void AppWeather::onRunning() {
     if (!handle_input(state_, now)) return;
     if (!view_due(now)) return;
     state_.weather = weather_->snapshot();
-    if (now >= refresh_due_ && !state_.weather.city.id.empty()) {
+    if (!state_.weather.day(state_.day).valid) state_.day = 0;
+    if (now >= refresh_due_) {
         weather_->refresh(state_.weather.city);
-        refresh_due_ = now + 1800000000LL;
+        refresh_due_ = now + 7200000000LL;
     }
     update_view(view_state());
 }

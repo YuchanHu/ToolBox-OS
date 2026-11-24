@@ -1,6 +1,8 @@
 #include "app_launcher.h"
 #include <hal/hal.h>
 #include <system/shell.h>
+#include <esp_log.h>
+#include <utility>
 
 void AppLauncher::onLauncherCreate() { open(); }
 
@@ -15,13 +17,24 @@ void AppLauncher::onLauncherOpen()
 
 void AppLauncher::onLauncherRunning()
 {
-    LvglLockGuard lock;
-    if (toolbox::shell_is_locked()) GetHAL().updateButtonStates();
-    if (toolbox::shell_home_timeout() && toolbox::shell_idle_ms() >= static_cast<uint32_t>(toolbox::shell_home_timeout()) * 1000) {
-        toolbox::shell_close_settings();
-        toolbox::shell_lock();
+    {
+        LvglLockGuard lock;
+        if (toolbox::shell_is_locked()) {
+            auto& hal = GetHAL();
+            hal.updateButtonStates();
+            if (hal.btnA.wasClicked() || hal.btnB.wasClicked()) toolbox::shell_key_unlock();
+        }
+        if (toolbox::shell_home_timeout() && toolbox::shell_idle_ms() >= static_cast<uint32_t>(toolbox::shell_home_timeout()) * 1000) {
+            toolbox::shell_close_settings();
+            toolbox::shell_lock();
+        }
+        if (!toolbox::shell_is_locked()) _view->update();
     }
-    if (!toolbox::shell_is_locked()) _view->update();
+    const int selected = std::exchange(selected_app_, -1);
+    if (selected >= 0 && openApp(selected)) {
+        returning_ = true;
+        if (!_view->remember_app(selected)) ESP_LOGW("Launcher", "Could not save drawer order");
+    }
 }
 
 void AppLauncher::onLauncherSleeping()
@@ -46,5 +59,5 @@ void AppLauncher::create_launcher_view()
 {
     _view = std::make_unique<view::LauncherView>();
     _view->init(getAppProps());
-    _view->onAppClicked = [this](int appID) { returning_ = true; openApp(appID); };
+    _view->onAppClicked = [this](int appID) { selected_app_ = appID; };
 }

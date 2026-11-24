@@ -16,7 +16,7 @@ public:
         return instance;
     }
 
-    void AddSsid(const std::string& ssid, const std::string& password);
+    bool AddSsid(const std::string& ssid, const std::string& password);
     void RemoveSsid(int index);
     void SetDefaultSsid(int index);
     void Clear();
@@ -27,7 +27,7 @@ private:
     ~SsidManager();
 
     void LoadFromNvs();
-    void SaveToNvs();
+    bool SaveToNvs();
 
     std::vector<SsidItem> ssid_list_;
 };

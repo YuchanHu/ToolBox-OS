@@ -173,9 +173,9 @@ void WifiStation::HandleScanResult() {
     auto& ssid_manager = SsidManager::GetInstance();
     auto ssid_list = ssid_manager.GetSsidList();
     for (int i = 0; i < ap_num; i++) {
-        auto ap_record = ap_records[i];
-        auto it = std::find_if(ssid_list.begin(), ssid_list.end(), [ap_record](const SsidItem& item) {
-            return strcmp((char *)ap_record.ssid, item.ssid.c_str()) == 0;
+        const auto& ap_record = ap_records[i];
+        auto it = std::find_if(ssid_list.begin(), ssid_list.end(), [&ap_record](const SsidItem& item) {
+            return strcmp(reinterpret_cast<const char*>(ap_record.ssid), item.ssid.c_str()) == 0;
         });
         if (it != ssid_list.end()) {
             ESP_LOGI(TAG, "Found AP: %s, BSSID: %02x:%02x:%02x:%02x:%02x:%02x, RSSI: %d, Channel: %d, Authmode: %d",

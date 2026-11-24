@@ -24,7 +24,7 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
-extern const char index_html_start[] asm("_binary_wifi_configuration_html_start");
+extern const char index_html_start[] asm("_binary_provision_html_start");
 extern const char done_html_start[] asm("_binary_wifi_configuration_done_html_start");
 
 WifiConfigurationAp::WifiConfigurationAp()
@@ -408,9 +408,7 @@ void WifiConfigurationAp::StartWebServer()
             }
 
             cJSON *city = cJSON_GetObjectItemCaseSensitive(json, "weather_city");
-            if (city && (!cJSON_IsString(city) || !city->valuestring ||
-                (city->valuestring[0] && (strlen(city->valuestring) != 6 ||
-                                         strspn(city->valuestring, "0123456789") != 6)))) {
+            if (city && (!cJSON_IsString(city) || strlen(city->valuestring) > 96)) {
                 cJSON_Delete(json);
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_sendstr(req, R"({"success":false,"error":"invalid_weather_city"})");
@@ -425,13 +423,19 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_OK;
             }
 
-            if (cJSON_IsString(city) && city->valuestring && strlen(city->valuestring) == 6 &&
-                strspn(city->valuestring, "0123456789") == 6) {
+            if (!this_->Save(ssid_str, password_str)) {
+                cJSON_Delete(json);
+                httpd_resp_sendstr(req, R"({"success":false,"error":"wifi_save_failed"})");
+                return ESP_OK;
+            }
+            if (city) {
+                std::string input = city->valuestring;
+                const bool adcode = input.size() == 6 && input.find_first_not_of("0123456789") == std::string::npos;
+                auto query = (input.empty() ? "auto:" : adcode ? "adcode:" : "city:") + input;
                 nvs_handle_t weather;
                 esp_err_t saved = nvs_open("weather", NVS_READWRITE, &weather);
                 if (saved == ESP_OK) {
-                    std::string selected = std::string(R"({"id":")") + city->valuestring + R"(","name":")" + city->valuestring + R"("})";
-                    saved = nvs_set_str(weather, "city", selected.c_str());
+                    saved = nvs_set_str(weather, "query", query.c_str());
                     if (saved == ESP_OK) saved = nvs_commit(weather);
                     nvs_close(weather);
                 }
@@ -442,7 +446,6 @@ void WifiConfigurationAp::StartWebServer()
                     return ESP_OK;
                 }
             }
-            this_->Save(ssid_str, password_str);
             cJSON_Delete(json);
             // 设置成功响应
             httpd_resp_set_type(req, "application/json");
@@ -552,6 +555,23 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_FAIL;
             }
 
+            nvs_handle_t weather;
+            if (nvs_open("weather", NVS_READONLY, &weather) == ESP_OK) {
+                char query[320]{};
+                size_t len = sizeof(query);
+                if (nvs_get_str(weather, "query", query, &len) == ESP_OK) {
+                    const char *value = strchr(query, ':');
+                    if (value) cJSON_AddStringToObject(json, "weather_city", value + 1);
+                } else {
+                    len = sizeof(query);
+                    if (nvs_get_str(weather, "city", query, &len) != ESP_OK) query[0] = 0;
+                    auto *old = cJSON_Parse(query);
+                    auto *id = cJSON_GetObjectItemCaseSensitive(old, "id");
+                    if (cJSON_IsString(id)) cJSON_AddStringToObject(json, "weather_city", id->valuestring);
+                    cJSON_Delete(old);
+                }
+                nvs_close(weather);
+            }
             // 添加配置项到JSON
             if (!this_->ota_url_.empty()) {
                 cJSON_AddStringToObject(json, "ota_url", this_->ota_url_.c_str());
@@ -614,16 +634,6 @@ void WifiConfigurationAp::StartWebServer()
             if (!json) {
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
                 return ESP_FAIL;
-            }
-
-            cJSON *city = cJSON_GetObjectItemCaseSensitive(json, "weather_city");
-            if (city && (!cJSON_IsString(city) || !city->valuestring ||
-                (city->valuestring[0] && (strlen(city->valuestring) != 6 ||
-                                         strspn(city->valuestring, "0123456789") != 6)))) {
-                cJSON_Delete(json);
-                httpd_resp_set_type(req, "application/json");
-                httpd_resp_sendstr(req, R"({"success":false,"error":"invalid_weather_city"})");
-                return ESP_OK;
             }
 
             // 获取当前对象
@@ -771,10 +781,10 @@ bool WifiConfigurationAp::ConnectToWifi(const std::string &ssid, const std::stri
     }
 }
 
-void WifiConfigurationAp::Save(const std::string &ssid, const std::string &password)
+bool WifiConfigurationAp::Save(const std::string &ssid, const std::string &password)
 {
     ESP_LOGI(TAG, "Save SSID %s %d", ssid.c_str(), ssid.length());
-    SsidManager::GetInstance().AddSsid(ssid, password);
+    return SsidManager::GetInstance().AddSsid(ssid, password);
 }
 
 void WifiConfigurationAp::OnExitRequested(std::function<void()> callback)

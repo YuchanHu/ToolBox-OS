@@ -43,6 +43,15 @@ std::string Settings::GetString(const std::string& key, const std::string& defau
     return value;
 }
 
+esp_err_t Settings::TrySetString(const std::string& key, const std::string& value)
+{
+    if (!nvs_handle_) return open_result_;
+    if (!read_write_) return ESP_ERR_INVALID_STATE;
+    const auto err = nvs_set_str(nvs_handle_, key.c_str(), value.c_str());
+    if (err == ESP_OK) dirty_ = true;
+    return err;
+}
+
 void Settings::SetString(const std::string& key, const std::string& value)
 {
     if (read_write_) {
@@ -132,6 +141,7 @@ void Settings::EraseKey(const std::string& key)
         auto ret = nvs_erase_key(nvs_handle_, key.c_str());
         if (ret != ESP_ERR_NVS_NOT_FOUND) {
             ESP_ERROR_CHECK(ret);
+            dirty_ = true;
         }
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
@@ -142,6 +152,7 @@ void Settings::EraseAll()
 {
     if (read_write_) {
         ESP_ERROR_CHECK(nvs_erase_all(nvs_handle_));
+        dirty_ = true;
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }

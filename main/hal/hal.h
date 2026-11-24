@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "battery_monitor.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
@@ -102,29 +103,6 @@ struct DateYmd {
  * @brief
  *
  */
-class BootLogo {
-public:
-    BootLogo()
-    {
-        _panel = std::make_unique<uitk::lvgl_cpp::Container>(lv_screen_active());
-        _panel->setSize(466, 466);
-        _panel->setAlign(LV_ALIGN_CENTER);
-        _panel->setBorderWidth(0);
-        _panel->setBgOpa(0);
-        _panel->setPaddingAll(0);
-        _panel->setBgColor(lv_color_black());
-
-        toolbox::ui::boot(_panel->get());
-    }
-
-private:
-    std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
-};
-
-/**
- * @brief
- *
- */
 class Hal {
 public:
     void init();
@@ -139,6 +117,7 @@ public:
     void factoryReset();
 
     /* ---------------------------------- Power --------------------------------- */
+    toolbox::BatteryStatus getBatteryStatus();
     uint8_t getBatteryLevel();
     bool isBatteryCharging(bool strict = false);
     void setPowerLed(bool enabled);
@@ -150,12 +129,10 @@ public:
 
     // M5GFX
     LGFX_Device& getDisplay();
-    LGFX_Sprite& getCanvas();
-    void updateCanvas();
 
     // Lvgl
     lv_indev_t* lvTouchpad = nullptr;
-    std::unique_ptr<BootLogo> bootLogo;
+    void presentBootHome(); // Called with the LVGL lock held.
     bool lvglLock();
     void lvglUnlock();
     void startLvglUpdate();
@@ -175,17 +152,6 @@ public:
     int getAudioSampleRate();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
-
-    struct AudioSpectrumFrame {
-        static constexpr std::size_t bandCount = 20;
-        std::array<float, bandCount> bands     = {};
-        float peakFrequencyHz                  = 0.0f;
-    };
-    void updateAudioSpectrum();
-    const AudioSpectrumFrame& getAudioSpectrum() const
-    {
-        return _audio_spectrum;
-    }
 
     void playBootSfx();
 
@@ -283,7 +249,6 @@ private:
     i2c_bus_handle_t _i2c_bus = nullptr;
     ImuData _imu_data;
     ButtonConfig _btn_config;
-    AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
     int _spk_volume    = 80;
 

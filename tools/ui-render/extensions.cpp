@@ -23,7 +23,11 @@ void stop() {}
 } // namespace audio
 namespace toolbox {
 WeatherService::WeatherService() {
-    result_.message = "选择城市";
+    std::ifstream input(TOOLBOX_UI_SOURCE_DIR "/fixtures/weather-uapi.json");
+    std::string body((std::istreambuf_iterator<char>(input)), {});
+    auto *json = cJSON_Parse(body.c_str());
+    require(decode_weather(result_, json), "Load weather for button tests");
+    cJSON_Delete(json);
 }
 WeatherService::~WeatherService() {}
 WeatherResult WeatherService::snapshot() {
@@ -184,35 +188,61 @@ void check_extensions() {
         ExtensionViewState state;
         state.kind = Extension::Weather;
         state.weather.city.name = "北京";
-        state.weather.days[0].date = "2026-11-17";
-        state.weather.days[1].date = "2026-11-18";
-        require(decode_weather(state.weather, json, 12 * 60), "Production parser must decode real domestic response");
+        require(decode_weather(state.weather, json), "Production parser must decode real domestic response");
         cJSON_Delete(json);
-        require(state.weather.days[0].temperature == "7" && state.weather.days[1].high == "7" &&
-                    state.weather.days[0].probability.empty(),
+        require(state.weather.day(0).temperature == "7" && state.weather.day(1).high == "7" &&
+                    state.weather.forecast->days.size() == 7 && state.weather.day(0).code == 101,
                 "Missing probability cannot become fabricated data");
         ExtensionView view(Extension::Weather);
         view.update(state, lv_tick_get());
         advance(40);
         screenshot("weather-today");
+        state.page = ExtensionPage::Daily;
+        view.update(state, lv_tick_get());
+        advance(40);
+        screenshot("weather-week");
+        state.page = ExtensionPage::Hourly;
+        view.update(state, lv_tick_get());
+        require(find_text(lv_screen_active(), "暂无预报"), "Missing hours must show empty state");
+        std::ifstream international(TOOLBOX_UI_SOURCE_DIR "/fixtures/weather-tokyo.json");
+        std::string tokyo((std::istreambuf_iterator<char>(international)), {});
+        auto *jp = cJSON_Parse(tokyo.c_str());
+        auto domestic = state.weather;
+        require(decode_weather(state.weather, jp), "Tokyo without adcode must decode");
+        cJSON_Delete(jp);
+        const auto &hours = state.weather.forecast->hours;
+        require(state.weather.forecast->days.size() == 3 && hours.size() == 10 &&
+                hours.front().time.substr(11, 5) == "14:00" && !hours.front().pop.empty() &&
+                !hours.front().precip.empty(), "Tokyo local dates and hourly precip/pop");
+        view.update(state, lv_tick_get());
+        advance(40);
+        screenshot("weather-hourly");
+        state.weather = domestic;
+        state.page = ExtensionPage::Main;
         state.day = 1;
         view.update(state, lv_tick_get());
         advance(200);
         screenshot("weather-tomorrow");
         state.day = 0;
-        state.weather.days[0].code = 100;
-        state.weather.days[0].condition = "晴";
+        auto animation = std::make_shared<Forecast>(*state.weather.forecast);
+        state.weather.forecast = animation;
+        animation->days[0].code = 100;
+        animation->days[0].condition = "晴";
         view.update(state, lv_tick_get());
         advance(200);
         screenshot("weather-sun");
         for (int code : {103, 104, 501, 309, 305, 307, 313, 400, 404, 302, 304}) {
-            state.weather.days[0].code = code;
+            animation = std::make_shared<Forecast>(*animation);
+            state.weather.forecast = animation;
+            animation->days[0].code = code;
             view.update(state, lv_tick_get());
             advance(40);
             screenshot(("weather-animation-" + std::to_string(code)).c_str());
         }
-        state.weather.days[0].night = true;
-        state.weather.days[0].code = 100;
+        animation = std::make_shared<Forecast>(*animation);
+        state.weather.forecast = animation;
+        animation->days[0].night = true;
+        animation->days[0].code = 100;
         view.update(state, lv_tick_get());
         advance(40);
         screenshot("weather-night");
@@ -301,10 +331,11 @@ void check_extensions() {
         require(GetHAL().vibration_count == feedback, "Today boundary has no extra key feedback");
         key(app, false);
         require(GetHAL().vibration_count == feedback + 1, "B moves to tomorrow once");
+        for (int i = 2; i <= 6; ++i) key(app, false);
         key(app, false);
-        require(GetHAL().vibration_count == feedback + 1, "Tomorrow boundary cannot advance");
+        require(GetHAL().vibration_count == feedback + 6, "Last forecast day cannot advance");
         key(app, true);
-        require(GetHAL().vibration_count == feedback + 2, "A returns to today");
+        require(GetHAL().vibration_count == feedback + 7, "A returns to previous day");
         close(app);
     }
     {

@@ -1,4 +1,7 @@
-file(GLOB_RECURSE MY_SRCS
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    set(track_source_changes CONFIGURE_DEPENDS)
+endif()
+file(GLOB_RECURSE MY_SRCS ${track_source_changes}
     "apps/app_camera/*.cpp"
     "apps/app_counter/*.cpp"
     "apps/app_timers/*.cpp"
@@ -22,6 +25,8 @@ list(APPEND MY_SRCS
     "apps/app_setup/app_setup.cpp"
     "apps/app_stopwatch/app_stopwatch.cpp"
     "assets/ui_icons.c"
+    "assets/camera_remote_icons.c"
+    "assets/boot_logo.c"
     "assets/app_icons.c"
     "assets/images/icon_indicator_left.c"
     "assets/images/icon_indicator_right.c"

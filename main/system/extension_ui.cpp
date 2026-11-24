@@ -36,6 +36,10 @@ ExtensionView::ExtensionView(Extension kind) : kind_(kind) {
     root_ = ui::panel(lv_screen_active(), 1, 0, 466, 466);
     lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(root_, event, LV_EVENT_CLICKED, this);
+    if (kind_ == Extension::Weather) {
+        for (auto code : {LV_EVENT_PRESSED, LV_EVENT_PRESSING, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
+            lv_obj_add_event_cb(root_, event, code, this);
+    }
 }
 ExtensionView::~ExtensionView() {
     lv_obj_delete(root_);
@@ -49,7 +53,8 @@ ExtensionEvent ExtensionView::take_event() {
 lv_obj_t *ExtensionView::button(lv_obj_t *parent, const char *caption, int x, int y, int width, int height,
                                 ExtensionAction action, int value, bool accent) {
     auto *object =
-        ui::button(parent, caption, x, y, width, height, [](lv_event_t *) {}, accent ? ui::accent : 0x202631);
+        ui::button(parent, caption, x, y, width, height, [](lv_event_t *) {}, accent ? ui::accent : 0x202631,
+                   kind_ == Extension::Weather ? &toolbox_misans_20 : &toolbox_misans_23);
     lv_obj_set_user_data(object, reinterpret_cast<void *>((static_cast<uintptr_t>(action) << 16) | (value & 0xffff)));
     lv_obj_add_event_cb(object, event, LV_EVENT_CLICKED, this);
     return object;
@@ -58,7 +63,24 @@ void ExtensionView::event(lv_event_t *event) {
     auto *self = static_cast<ExtensionView *>(lv_event_get_user_data(event));
     auto *object = static_cast<lv_obj_t *>(lv_event_get_target(event));
     if (object == self->root_) {
-        self->reveal(lv_tick_get());
+        const auto code = lv_event_get_code(event);
+        if (self->kind_ == Extension::Weather && self->state_.page == ExtensionPage::Main && self->pull_hint_) {
+            auto *input = lv_event_get_indev(event);
+            lv_point_t point{};
+            if (input) lv_indev_get_point(input, &point);
+            if (code == LV_EVENT_PRESSED) self->pull_origin_ = point;
+            if (code == LV_EVENT_PRESSING) {
+                const int dy = point.y - self->pull_origin_.y;
+                self->pulling_ = dy > 58 && dy > std::abs(point.x - self->pull_origin_.x) && !self->state_.weather.busy;
+                lv_obj_set_flag(self->pull_hint_, LV_OBJ_FLAG_HIDDEN, !self->pulling_);
+            }
+            if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+                if (self->pulling_ && code == LV_EVENT_RELEASED) self->pending_.action = ExtensionAction::Refresh;
+                self->pulling_ = false;
+                lv_obj_add_flag(self->pull_hint_, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        if (code == LV_EVENT_CLICKED) self->reveal(lv_tick_get());
         return;
     }
     if (self->pending_.action != ExtensionAction::None)
@@ -82,28 +104,38 @@ void ExtensionView::build() {
     lv_obj_clean(root_);
     content_ = controls_ = dialog_ = time_ = detail_ = message_ = ring_ = drawing_ = primary_ = input_ = nullptr;
     keyboard_ = results_ = nullptr;
+    sky_ = pull_hint_ = nullptr;
+    pulling_ = false;
     values_.clear();
     built_confirm_ = false;
     city_revision_ = UINT32_MAX;
     content_ = ui::panel(root_, 0, 0, 466, 466);
     const bool main = state_.page == ExtensionPage::Main;
     if (main && kind_ == Extension::Weather) {
-        drawing_ = ui::panel(content_, 0, 0, 466, 466);
+        sky_ = ui::panel(content_, 0, 0, 466, 466);
+        lv_obj_add_event_cb(sky_, draw, LV_EVENT_DRAW_MAIN, this);
+        drawing_ = ui::panel(content_, 0, 72, 466, 112);
+        lv_obj_set_style_bg_opa(drawing_, LV_OPA_TRANSP, 0);
         lv_obj_add_event_cb(drawing_, draw, LV_EVENT_DRAW_MAIN, this);
-        message_ = ui::text(content_, "", 0, 62, 466, &toolbox_misans_26);
-        detail_ = ui::text(content_, "", 0, 125, 466, &toolbox_misans_20);
-        time_ = ui::text(content_, "--°", 0, 170, 466, &toolbox_misans_65);
-        values_.push_back(ui::text(content_, "", 0, 261, 466));
-        values_.push_back(ui::text(content_, "", 0, 316, 466, &toolbox_misans_20));
-        values_.push_back(ui::text(content_, "", 63, 354, 340, &toolbox_misans_20));
-        values_.push_back(ui::text(content_, "", 83, 389, 300, &toolbox_misans_20));
-        controls_ = ui::panel(content_, 0, 0, 466, 466);
-        lv_obj_set_style_bg_opa(controls_, LV_OPA_TRANSP, 0);
-        auto *back = button(controls_, "", 63, 82, 46, 46, ExtensionAction::Back);
+        message_ = ui::text(content_, "", 110, 31, 246, &toolbox_misans_26);
+        detail_ = ui::text(content_, "", 90, 65, 286, &toolbox_misans_20);
+        time_ = ui::text(content_, "--°", 30, 155, 406, &toolbox_misans_65);
+        values_.push_back(ui::text(content_, "", 46, 234, 374, &toolbox_misans_26));
+        values_.push_back(ui::text(content_, "", 60, 271, 346, &toolbox_misans_20));
+        for (int i = 0; i < 3; ++i) {
+            auto *card = ui::panel(content_, 69 + 111*i, 309, 106, 48, 0x203449, 19);
+            lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_user_data(card, reinterpret_cast<void *>(static_cast<uintptr_t>(ExtensionAction::Edit) << 16));
+            lv_obj_add_event_cb(card, event, LV_EVENT_CLICKED, this);
+            values_.push_back(ui::text(card, "", 0, 11, 106, &toolbox_misans_20));
+        }
+        button(content_, "24 小时", 100, 369, 127, 44, ExtensionAction::Edit, 1);
+        button(content_, "7 日预报", 239, 369, 127, 44, ExtensionAction::Edit, 2);
+        auto *back = button(content_, "", 59, 92, 46, 46, ExtensionAction::Back);
         ui::icon(back, &toolbox_icon_back_28, 9, 9);
-        lv_obj_add_flag(controls_, LV_OBJ_FLAG_HIDDEN);
-        button(controls_, "详情", 94, 355, 130, 44, ExtensionAction::Edit);
-        button(controls_, "刷新", 240, 355, 130, 44, ExtensionAction::Refresh);
+        button(content_, "城市", 342, 94, 69, 42, ExtensionAction::City);
+        pull_hint_ = ui::text(content_, "松开刷新", 158, 108, 150, &toolbox_misans_20);
+        lv_obj_add_flag(pull_hint_, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     if (main && kind_ == Extension::Level) {
@@ -114,6 +146,8 @@ void ExtensionView::build() {
         detail_ = ui::text(content_, "", 0, 290, 466, &toolbox_misans_20);
     } else {
         const char *page_title = title(kind_);
+        if (state_.page == ExtensionPage::Hourly) page_title = "24 小时天气";
+        if (state_.page == ExtensionPage::Daily) page_title = "7 日预报";
         if (state_.page == ExtensionPage::City)
             page_title = "选择城市";
         if (state_.page == ExtensionPage::Details)
@@ -172,7 +206,9 @@ void ExtensionView::build() {
         lv_obj_add_flag(controls_, LV_OBJ_FLAG_HIDDEN);
         return;
     }
-    if (state_.page == ExtensionPage::Presets) {
+    if (state_.page == ExtensionPage::Daily || state_.page == ExtensionPage::Hourly) {
+        forecast_page();
+    } else if (state_.page == ExtensionPage::Presets) {
         const int presets[] = {1, 3, 5, 10, 15, 30};
         for (int i = 0; i < 6; ++i)
             button(content_, (std::to_string(presets[i]) + " 分钟").c_str(), 69 + i % 2 * 171, 144 + i / 2 * 72, 157,
@@ -273,12 +309,94 @@ void ExtensionView::build() {
                     lv_obj_add_flag(self->results_, LV_OBJ_FLAG_HIDDEN);
             },
             LV_EVENT_FOCUSED, this);
+        button(content_, "自动定位", 69, 250, 145, 42, ExtensionAction::Search, -1);
         button(content_, "搜索", 257, 250, 140, 42, ExtensionAction::Search, 0, true);
         message_ = ui::text(content_, "", 69, 203, 328, &toolbox_misans_20, ui::accent);
-    } else if (state_.page == ExtensionPage::Details || state_.page == ExtensionPage::Stats) {
+    } else if (state_.page == ExtensionPage::Details) {
+        auto *list = ui::scroll_panel(content_, 70, 140, 326, 243, 0x152536, 20);
+        detail_ = ui::text(list, "", 9, 12, 308, &toolbox_misans_20);
+        lv_obj_set_style_text_line_space(detail_, 7, 0);
+        ui::cache_scroll_rows(list);
+    } else if (state_.page == ExtensionPage::Stats) {
         message_ = ui::text(content_, "", 65, 145, 336, &toolbox_misans_23, ui::accent);
         detail_ = ui::text(content_, "", 65, 194, 336, &toolbox_misans_20);
         lv_obj_set_style_text_line_space(detail_, 14, 0);
+    }
+}
+
+void ExtensionView::forecast_page() {
+    const auto data = state_.weather.forecast;
+    const bool hourly = state_.page == ExtensionPage::Hourly;
+    lv_obj_set_style_bg_color(content_, lv_color_hex(0x172c47), 0);
+    lv_obj_set_style_bg_grad_color(content_, lv_color_hex(0x0b192b), 0);
+    lv_obj_set_style_bg_grad_dir(content_, LV_GRAD_DIR_VER, 0);
+    if (!data || (hourly ? data->hours.empty() : data->days.empty())) {
+        ui::text(content_, "暂无预报", 80, 218, 306, &toolbox_misans_26);
+        return;
+    }
+    if (!hourly) {
+        double low = 1000, high = -1000;
+        for (const auto &day : data->days) {
+            if (day.low.empty() || day.high.empty()) continue;
+            low = std::min(low, atof(day.low.c_str()));
+            high = std::max(high, atof(day.high.c_str()));
+        }
+        int row = 0;
+        for (const auto &day : data->days) {
+            if (day.low.empty() || day.high.empty()) continue;
+            const int y = 131 + row++ * 38;
+            const auto *font = &toolbox_misans_20;
+            ui::text(content_, day.week.c_str(), 67, y, 68, font);
+            auto *condition = ui::text(content_, day.day_condition.c_str(), 139, y, 90, font);
+            lv_label_set_long_mode(condition, LV_LABEL_LONG_MODE_DOTS);
+            lv_obj_set_height(condition, font->line_height);
+            ui::text(content_, (day.low + "°").c_str(), 224, y, 58, font);
+            ui::text(content_, (day.high + "°").c_str(), 335, y, 65, font);
+            const double scale = 57. / std::max(1., high - low);
+            auto *track = ui::panel(content_, 282, y + 12, 57, 6, 0x2b4055, 3);
+            ui::panel(track, int((atof(day.low.c_str()) - low) * scale), 0,
+                      std::max(2, int((atof(day.high.c_str()) - atof(day.low.c_str())) * scale)), 6, ui::accent, 3);
+        }
+        if (!row) ui::text(content_, "暂无预报", 80, 218, 306, &toolbox_misans_26);
+        return;
+    }
+    const auto &hours = data->hours;
+    double low = 1000, high = -1000, precip = 0, pop = -1;
+    bool has_precip = false;
+    for (const auto &h : hours) {
+        const auto t = atof(h.temperature.c_str());
+        low = std::min(low, t);
+        high = std::max(high, t);
+        if (!h.pop.empty()) pop = std::max(pop, atof(h.pop.c_str()));
+        if (!h.precip.empty()) {
+            has_precip = true;
+            precip += atof(h.precip.c_str());
+        }
+    }
+    hourly_points_.clear();
+    for (size_t i = 0; i < hours.size(); ++i) {
+        const int x = hours.size() == 1 ? 150 : 300 * i / (hours.size() - 1);
+        const int y = 94 - int(84 * (atof(hours[i].temperature.c_str()) - low) / std::max(1., high - low));
+        hourly_points_.push_back({static_cast<lv_value_precise_t>(x), static_cast<lv_value_precise_t>(y)});
+        if (!i || i == hours.size() - 1 || (hours.size() >= 5 && i == hours.size()/2)) {
+            ui::text(content_, hours[i].time.substr(11, 5).c_str(), 44+x, 285, 78, &toolbox_misans_20);
+            ui::text(content_, (hours[i].temperature+"°").c_str(), 44+x, 135+y, 78, &toolbox_misans_20);
+        }
+    }
+    auto *line = lv_line_create(content_);
+    lv_obj_set_pos(line, 83, 169);
+    lv_line_set_points(line, hourly_points_.data(), hourly_points_.size());
+    lv_obj_set_style_line_width(line, 4, 0);
+    lv_obj_set_style_line_color(line, lv_color_hex(ui::accent), 0);
+    char rain[48];
+    if (has_precip || pop >= 0) {
+        std::string caption;
+        if (pop >= 0) caption = "降水概率 " + std::to_string(int(pop)) + "%";
+        if (has_precip) {
+            snprintf(rain, sizeof(rain), "  降水 %.1f mm", precip);
+            caption += rain;
+        }
+        ui::text(content_, caption.c_str(), 63, 344, 340, &toolbox_misans_20);
     }
 }
 
@@ -304,6 +422,17 @@ void ExtensionView::confirmation() {
 }
 
 void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
+    if (kind_ == Extension::Weather && built_ && state.page == built_page_ && state.day == state_.day &&
+        state.weather.revision == state_.weather.revision && state.weather.forecast == state_.weather.forecast) {
+        const auto &day = state.weather.day(state.day);
+        const bool clear = day.code == 100 || day.code == 150;
+        const unsigned interval = day.night && clear ? 100 : 33;
+        if (drawing_ && day.valid && (day.night || !clear) && now - frame_at_ >= interval) {
+            frame_at_ = now;
+            lv_obj_invalidate(drawing_);
+        }
+        return;
+    }
     const auto level_on_target = [](const ExtensionViewState& value) {
         return value.valid && value.error <= value.tolerance;
     };
@@ -321,12 +450,15 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
                 level_display_[i] = std::lround(readings[i] * 100);
         }
     }
-    const auto& next_day = state.weather.days[state.day];
-    const auto& old_day = state_.weather.days[state_.day];
+    const auto& next_day = state.weather.day(state.day);
+    const auto& old_day = state_.weather.day(state_.day);
     const bool weather_changed = !built_ || state.page != state_.page || state.day != state_.day ||
         next_day.valid != old_day.valid || next_day.code != old_day.code || next_day.night != old_day.night;
+    const bool forecast_changed = state.weather.forecast != state_.weather.forecast;
+    const bool weather_message_changed = state.weather.message != state_.weather.message;
     state_ = state;
-    if (!built_ || built_page_ != state.page) {
+    if (!built_ || built_page_ != state.page || (forecast_changed &&
+        (state.page == ExtensionPage::Hourly || state.page == ExtensionPage::Daily))) {
         built_page_ = state.page;
         built_ = true;
         build();
@@ -378,24 +510,22 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
             label(detail_,
                   state.valid ? "X " + signed_angle(level_display_[1] / 100.) + "°   Y " + signed_angle(level_display_[2] / 100.) + "°" : state.message);
         } else {
-            const auto &day = state.weather.days[state.day];
-            label(message_, state.weather.city.name.empty() ? "请在配网时配置城市" : state.weather.city.name);
-            label(detail_, std::string(state.day == 0 ? "今日" : "明日") + " " + day.date +
-                               (state.weather.cached ? " · 缓存" : ""));
+            const auto &day = state.weather.day(state.day);
+            label(message_, state.weather.city.name.empty() ? "自动定位" : state.weather.city.name);
+            label(detail_, day.date + " " + day.week + (state.weather.cached && day.valid ? " · 缓存" : ""));
             label(time_, state.day == 0
                              ? (day.temperature.empty() ? "--°" : day.temperature + "°")
                              : (day.low.empty() || day.high.empty() ? "--°" : day.low + "~" + day.high + "°"));
             const auto *font = state.day == 0 ? &toolbox_misans_65 : &toolbox_misans_36;
             if (lv_obj_get_style_text_font(time_, LV_PART_MAIN) != font)
                 lv_obj_set_style_text_font(time_, font, 0);
-            label(values_[0], day.condition.empty() ? state.weather.message : day.condition);
-            label(values_[1], "最高 " + (day.high.empty() ? "--" : day.high) + "°   最低 " +
-                                  (day.low.empty() ? "--" : day.low) + "°");
-            label(values_[2], "湿度 " + (day.humidity.empty() ? "--" : day.humidity) + "%   风速 " +
-                                  (day.wind.empty() ? "--" : day.wind) + " km/h");
-            label(values_[3], day.probability.empty()
-                ? (day.precipitation.empty() ? "更新 " + day.updated : "降水 " + day.precipitation + " mm")
-                : "降水概率 " + day.probability + "%");
+            label(values_[0], state.weather.busy ? state.weather.message : day.condition +
+                (day.feels_like.empty() ? "" : " · 体感 " + day.feels_like + "°"));
+            label(values_[1], day.valid ? "最高 " + day.high + "°   最低 " + day.low + "°" : state.weather.message);
+            label(values_[2], day.humidity.empty() ? "湿度 --" : "湿度 " + day.humidity + "%");
+            label(values_[3], day.power.empty() ? "风力 --" : "风 " + day.power);
+            label(values_[4], state.day == 0 ? "AQI " + (day.aqi.empty() ? "--" : day.aqi) :
+                  "UV " + (day.uv.empty() ? "--" : day.uv));
             if (previous_day_ != state.day) {
                 previous_day_ = state.day;
                 lv_anim_t a;
@@ -439,26 +569,47 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
                 lv_obj_remove_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
-                results_ = ui::panel(content_, 69, 300, 328, 120);
+                results_ = ui::scroll_panel(content_, 69, 300, 328, 120);
                 auto *list = results_;
-                lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
-                lv_obj_set_scroll_dir(list, LV_DIR_VER);
                 for (size_t i = 0; i < state.weather.cities.size(); ++i)
                     button(list, state.weather.cities[i].name.c_str(), 0, i * 55, 328, 50, ExtensionAction::City, i);
+                ui::cache_scroll_rows(list);
             }
         }
-    } else if (state.page == ExtensionPage::Details) {
-        const auto &day = state.weather.days[state.day];
-        label(message_, state.weather.message);
-        label(detail_, "湿度 " + day.humidity + "%\n风速 " + day.wind + " km/h\n更新 " + day.updated + "\n" +
-                           (state.day == 0 ? "实时天气" : "明日预报") + "\n来源 UAPI");
+    } else if (state.page == ExtensionPage::Details &&
+               (weather_changed || forecast_changed || weather_message_changed)) {
+        const auto &day = state.weather.day(state.day);
+        std::string lines;
+        auto add = [&](const char* key, const std::string& value, const char* unit = "") {
+            if (!value.empty()) lines += std::string(key) + " " + value + unit + "\n";
+        };
+        add("天气", day.condition);
+        add("夜间", day.night_condition);
+        add("体感", day.feels_like, "°");
+        add("湿度", day.humidity, "%");
+        add("风向", day.direction);
+        add("风力", day.power);
+        add("风速", day.wind, " km/h");
+        add("降水", day.precipitation, " mm");
+        add("能见度", day.visibility, " km");
+        add("气压", day.pressure, " hPa");
+        add("紫外线", day.uv);
+        add("云量", day.cloud, "%");
+        add("AQI", day.aqi);
+        add("", day.category);
+        add("", day.pollutants);
+        add("预警", day.warning);
+        add("日出", day.sunrise);
+        add("日落", day.sunset);
+        add("更新", day.updated);
+        if (ui::set_text(detail_, (lines.empty() ? state.weather.message : lines).c_str()))
+            lv_obj_send_event(lv_obj_get_parent(detail_), LV_EVENT_REFRESH, nullptr);
     } else if (state.page == ExtensionPage::Stats) {
         label(message_, "已完成专注");
         label(detail_, std::to_string(state.completed) + " 次");
     }
-    const bool animated_weather = next_day.valid && (next_day.night || (next_day.code != 100 && next_day.code != 150));
-    if (drawing_ && (level_changed || (kind_ == Extension::Weather &&
-                    (weather_changed || (animated_weather && now - frame_at_ >= 33))))) {
+    if (sky_ && weather_changed) lv_obj_invalidate(sky_);
+    if (drawing_ && (level_changed || (kind_ == Extension::Weather && weather_changed))) {
         frame_at_ = now;
         lv_obj_invalidate(drawing_);
     }
@@ -526,13 +677,13 @@ void ExtensionView::draw(lv_event_t *event) {
         }
         return;
     }
-    const auto &day = state.weather.days[state.day];
+    const auto &day = state.weather.day(state.day);
     if (!day.valid) {
         rect(0, 0, 466, 466, 0, 0);
         return;
     }
     const int code = day.code;
-    const bool clear = code == 100 || code == 150, partly = code == 102 || code == 103 || code == 151 || code == 153;
+    const bool clear = code == 100 || code == 150, partly = code == 101 || code == 102 || code == 103 || code == 151 || code == 153;
     const bool snow = code >= 400 && code < 500, wet = code >= 300 && code < 400, fog = code >= 500 && code < 520;
     // A four-pixel repeating Bayer pattern distributes RGB565 quantization
     // error without a full-screen buffer or animated noise.
@@ -541,58 +692,61 @@ void ExtensionView::draw(lv_event_t *event) {
     static uint32_t previous_top = UINT32_MAX;
     const uint32_t top = day.night ? 0x070f26 : clear || partly ? 0x145b92 : 0x273d52;
     const uint32_t bottom = day.night ? 0x152943 : clear || partly ? 0x558eae : 0x111b29;
-    if (previous_top != top) {
-        const int bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-        for (int y = 0; y < 466; ++y) {
-            for (int x = 0; x < 4; ++x) {
-                unsigned pixel = 0;
-                for (int channel = 0; channel < 3; ++channel) {
-                    const int shift = 16 - channel * 8;
-                    const int start = (top >> shift) & 255;
-                    const int end = (bottom >> shift) & 255;
-                    const float value = start + (end - start) * y / 465.0f;
-                    const int levels = channel == 1 ? 63 : 31;
-                    const int quantized = std::clamp(static_cast<int>(value * levels / 255.0f +
-                        (bayer[y % 4][x] + .5f) / 16.0f), 0, levels);
-                    pixel = (pixel << (channel == 1 ? 6 : 5)) | quantized;
+    if (lv_event_get_target(event) == self->sky_) {
+        if (previous_top != top) {
+            const int bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+            for (int y = 0; y < 466; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    unsigned pixel = 0;
+                    for (int channel = 0; channel < 3; ++channel) {
+                        const int shift = 16 - channel * 8;
+                        const int start = (top >> shift) & 255;
+                        const int end = (bottom >> shift) & 255;
+                        const float value = start + (end - start) * y / 465.0f;
+                        const int levels = channel == 1 ? 63 : 31;
+                        const int quantized = std::clamp(static_cast<int>(value * levels / 255.0f +
+                            (bayer[y % 4][x] + .5f) / 16.0f), 0, levels);
+                        pixel = (pixel << (channel == 1 ? 6 : 5)) | quantized;
+                    }
+                    pixels[y * 4 + x] = pixel;
                 }
-                pixels[y * 4 + x] = pixel;
             }
+            sky_image.header.magic = LV_IMAGE_HEADER_MAGIC;
+            sky_image.header.cf = LV_COLOR_FORMAT_RGB565;
+            sky_image.header.w = 4;
+            sky_image.header.h = 466;
+            sky_image.header.stride = 8;
+            sky_image.data_size = sizeof(pixels);
+            sky_image.data = reinterpret_cast<const uint8_t*>(pixels);
+            previous_top = top;
+            lv_image_cache_drop(&sky_image);
         }
-        sky_image.header.magic = LV_IMAGE_HEADER_MAGIC;
-        sky_image.header.cf = LV_COLOR_FORMAT_RGB565;
-        sky_image.header.w = 4;
-        sky_image.header.h = 466;
-        sky_image.header.stride = 8;
-        sky_image.data_size = sizeof(pixels);
-        sky_image.data = reinterpret_cast<const uint8_t*>(pixels);
-        previous_top = top;
-        lv_image_cache_drop(&sky_image);
-    }
-    lv_draw_image_dsc_t sky;
-    lv_draw_image_dsc_init(&sky);
-    sky.src = &sky_image;
-    sky.tile = true;
-    lv_draw_image(layer, &sky, &area);
-    if (clear || partly) {
-        for (int r = 110; r >= 28; r -= 10)
-            rect(330 - r, 99 - r, r * 2, r * 2, day.night ? 0xdce9ff : 0xffe9ad, r, 8);
-        rect(302, 71, 56, 56, day.night ? 0xe3edff : 0xfff2c2, 28);
+        lv_draw_image_dsc_t sky;
+        lv_draw_image_dsc_init(&sky);
+        sky.src = &sky_image;
+        sky.tile = true;
+        lv_draw_image(layer, &sky, &area);
+        if (clear || partly) {
+            for (int r = 110; r >= 28; r -= 10)
+                rect(247 - r, 121 - r, r * 2, r * 2, day.night ? 0xdce9ff : 0xffe9ad, r, 8);
+            rect(219, 93, 56, 56, day.night ? 0xe3edff : 0xfff2c2, 28);
+        }
+        return;
     }
     if (day.night)
         for (int i = 0; i < 24; ++i)
-            rect((i * 137) % 466, (i * 83) % 290, 2, 2, 0xdce8ff, 1, 100 + 50 * sin(t + i));
+            rect((i * 137) % 466, (i * 83) % 112, 2, 2, 0xdce8ff, 1, 100 + 50 * sin(t + i));
     if (!clear)
         for (int i = 0; i < (fog ? 7 : 5); ++i) {
-            const int x = static_cast<int>(i * 143 + t * (4 + i)) % 760 - 150, y = 55 + i * (fog ? 50 : 44);
-            rect(x, y, 250, 62, 0xafc2d6, 31, 30);
-            rect(x + 22, y - 20, 140, 70, 0xafc2d6, 35, 20);
+            const int x = static_cast<int>(i * 143 + t * (4 + i)) % 760 - 150, y = 18 + i * (fog ? 7 : 11);
+            rect(x, y, 200, 44, 0xafc2d6, 22, 30);
+            rect(x + 22, y - 16, 114, 52, 0xafc2d6, 26, 20);
         }
     if (wet || snow)
         for (int i = 0; i < 48; ++i) {
             const int speed = 65 + i % 9 * 17;
             const bool flake = snow || (code == 313 && i % 2 == 0);
-            const int y = static_cast<int>(i * 83.17 + t * (flake ? speed * .22 : speed * 1.5)) % 580 - 60;
+            const int y = static_cast<int>(i * 83.17 + t * (flake ? speed * .22 : speed * 1.5)) % 160 - 24;
             const int x = (static_cast<int>(i * 137.51 + (flake ? sin(t * .7 + i) * 13 : -t * 20)) % 466 + 466) % 466;
             if (flake || code == 304)
                 rect(x, y, 3 + i % 3, 3 + i % 3, 0xe6f2ff, 3, 160);

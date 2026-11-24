@@ -22,5 +22,6 @@ public:
 private:
     std::unique_ptr<view::LauncherView> _view;
     bool returning_ = false;
+    int selected_app_ = -1;
     void create_launcher_view();
 };

@@ -17,6 +17,7 @@
 #include <memory>
 #include <atomic>
 #include <algorithm>
+#include <optional>
 #include <driver/gpio.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -178,7 +179,6 @@ public:
 };
 
 static std::unique_ptr<M5StopWatch> _display;
-static std::unique_ptr<LGFX_Sprite> _canvas;
 
 void Hal::display_init()
 {
@@ -197,14 +197,6 @@ void Hal::display_init()
         _display.reset();
     }
 
-    // mclog::tagInfo(_tag, "create full screen canvas");
-    // _canvas = std::make_unique<LGFX_Sprite>(_display.get());
-    // _canvas->setPsram(true);
-    // if (!_canvas->createSprite(_display->width(), _display->height())) {
-    //     mclog::tagError(_tag, "canvas init failed");
-    //     _canvas.reset();
-    // }
-
     // Load brightness from settings
     auto brightness = getBackLightBrightness(true);
     setBackLightBrightness(brightness, false);
@@ -213,16 +205,6 @@ void Hal::display_init()
 LGFX_Device &Hal::getDisplay()
 {
     return *_display;
-}
-
-LGFX_Sprite &Hal::getCanvas()
-{
-    return *_canvas;
-}
-
-void Hal::updateCanvas()
-{
-    _canvas->pushSprite(0, 0);
 }
 
 void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
@@ -273,8 +255,26 @@ static void touch_rtos_task(void*)
     TickType_t wake = xTaskGetTickCount();
     uint32_t last_good = GetHAL().millis();
     bool failed_gesture = false;
+    bool paused = false;
     while (true) {
         static uint32_t previous = 0;
+        if (toolbox::touch_input_blocked()) {
+            if (!paused) {
+                const auto now = GetHAL().millis();
+                portENTER_CRITICAL(&touch_mux);
+                touch_history.cancel(now);
+                portEXIT_CRITICAL(&touch_mux);
+                paused = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(25));
+            continue;
+        }
+        if (paused) {
+            wake = xTaskGetTickCount();
+            last_good = GetHAL().millis();
+            previous = 0;
+            paused = false;
+        }
         const auto start = perf::now();
         const bool valid = _cst820->read();
         const auto sampled = perf::now();
@@ -353,9 +353,13 @@ static SemaphoreHandle_t xGuiSemaphore;
 static SemaphoreHandle_t frame_done;
 static SemaphoreHandle_t te_ready;
 static QueueHandle_t frame_queue;
+static TaskHandle_t lvgl_task;
 static std::atomic<bool> _lvgl_update_enabled = false;
+static std::atomic<bool> frame_transferring = false;
 static bool frame_pending = false; // Accessed only while holding xGuiSemaphore.
 static bool refresh_deferred = false;
+static int64_t compose_started_us;
+static uint32_t compose_time_us;
 static uint32_t frame_stride;
 static toolbox::display::FrameRegions dirty_regions;
 static toolbox::display::FrameRegions repair_regions; // Published before frame_done.
@@ -371,7 +375,17 @@ struct DisplayFrame {
     toolbox::display::FrameRegions regions;
     uint32_t input_us;
     uint32_t activity_us;
+    const char* boot_marker;
 };
+
+// A prepared frame owns the second DIRECT buffer until the worker releases
+// the first. Both buffers are read-only until the older frame is released.
+static std::optional<DisplayFrame> prepared_frame;
+
+// Stop tagging queued frames once the first home transfer succeeds.
+static std::atomic<bool> boot_frames_enabled{false};
+static lv_obj_t* boot_logo;
+static constexpr char home_marker[] = "home_dma_us";
 
 static void IRAM_ATTR te_interrupt(void*)
 {
@@ -425,12 +439,16 @@ static void display_rtos_task(void*)
     uint32_t previous_present = 0;
     bool previous_active = false;
     DisplayFrame frame;
+    const char* last_boot_marker = nullptr;
     while (true) {
         if (xQueueReceive(frame_queue, &frame, pdMS_TO_TICKS(1000)) == pdTRUE) {
             // Prepare the first strip before waiting for the panel's blanking edge.
             uint32_t packing_us = stage_first_strip(frame, frame.regions.areas[0]);
             xSemaphoreTake(panel_mutex, portMAX_DELAY);
-            if (wait_for_te()) {
+            const bool accepted = wait_for_te();
+            if (accepted) {
+                frame_transferring.store(true, std::memory_order_release);
+                xTaskNotifyGive(lvgl_task);
                 const auto start = perf::now();
                 unsigned pixels = 0, bursts = 0;
                 for (unsigned i = 0; i < frame.regions.count; ++i) {
@@ -441,6 +459,12 @@ static void display_rtos_task(void*)
                     bursts += (area.y2 - area.y1 + dma_rows) / dma_rows;
                 }
                 const auto presented = perf::now();
+                if (frame.boot_marker && frame.boot_marker != last_boot_marker) {
+                    last_boot_marker = frame.boot_marker;
+                    ESP_LOGI("Boot", "%s=%lld", frame.boot_marker, esp_timer_get_time());
+                    if (frame.boot_marker == home_marker)
+                        boot_frames_enabled.store(false, std::memory_order_relaxed);
+                }
                 const auto period = te_period_us.load(std::memory_order_relaxed);
                 const auto transfer = presented - start;
                 perf::sample(perf::dma_transfer_time, transfer);
@@ -459,6 +483,7 @@ static void display_rtos_task(void*)
                     perf::sample(perf::input_to_present, presented - frame.input_us);
                 previous_present = presented;
                 previous_active = active;
+                frame_transferring.store(false, std::memory_order_release);
             } else {
                 repair_regions = frame.regions;
                 repair_input_us = frame.input_us;
@@ -466,6 +491,7 @@ static void display_rtos_task(void*)
             }
             xSemaphoreGive(panel_mutex);
             xSemaphoreGive(frame_done);
+            xTaskNotifyGive(lvgl_task);
         }
     }
 }
@@ -482,26 +508,52 @@ static bool finish_frame(TickType_t timeout)
     return !frame_pending;
 }
 
-static void wait_for_frame(lv_display_t*)
+static void queue_frame(DisplayFrame frame)
 {
-    finish_frame(portMAX_DELAY);
+    // The new DIRECT buffer includes the pixels of any older frame which
+    // missed TE. Transfer those regions with the next frame's pixels.
+    for (unsigned i = 0; i < repair_regions.count; ++i)
+        frame.regions.add(repair_regions.areas[i]);
+    repair_regions.count = 0;
+    if (!frame.input_us) frame.input_us = repair_input_us;
+    repair_input_us = 0;
+    frame_pending = true;
+    const BaseType_t queued = xQueueSend(frame_queue, &frame, 0);
+    configASSERT(queued == pdTRUE);
+}
+
+static bool can_render()
+{
+    if (finish_frame(0) && prepared_frame) {
+        queue_frame(*prepared_frame);
+        prepared_frame.reset();
+    }
+    // Short draws can use a newer touch sample after TE. Longer draws
+    // start earlier so their work fits within one panel period.
+    const uint32_t half_period = te_period_us.load(std::memory_order_relaxed) / 2;
+    return !prepared_frame &&
+           (!frame_pending || frame_transferring.load(std::memory_order_acquire) ||
+            compose_time_us > std::max<uint32_t>(8000, half_period));
 }
 
 static void refresh_if_ready(lv_timer_t* timer)
 {
-    // LVGL DIRECT sync copies pixels out of the buffer held by DMA.
-    // Gate only this timer. Input, animations and application logic can
-    // continue to invalidate objects while the previous frame is in flight.
-    if (!finish_frame(0)) {
+    // DIRECT may read the previous buffer for synchronization while the
+    // worker owns it. All rendering goes to the other buffer.
+    if (!can_render()) {
         refresh_deferred = true;
         return;
     }
     refresh_deferred = false;
-    for (unsigned i = 0; i < repair_regions.count; ++i)
-        lv_obj_invalidate_area(lv_screen_active(), &repair_regions.areas[i]);
-    repair_regions.count = 0;
-    if (!pending_input_us) pending_input_us = repair_input_us;
-    repair_input_us = 0;
+    if (!frame_pending) {
+        for (unsigned i = 0; i < repair_regions.count; ++i)
+            lv_obj_invalidate_area(lv_screen_active(), &repair_regions.areas[i]);
+        repair_regions.count = 0;
+        if (!pending_input_us) pending_input_us = repair_input_us;
+        repair_input_us = 0;
+    }
+    compose_started_us = esp_timer_get_time();
+    lv_anim_refr_now();
     lv_display_refr_timer(timer);
 }
 
@@ -520,15 +572,31 @@ static void unlock_gui()
     xSemaphoreGive(xGuiSemaphore);
 }
 
+constexpr uint32_t display_refresh_ms = 12;
+constexpr uint32_t input_read_ms = 4;
+constexpr uint32_t recording_refresh_ms = 40;
+constexpr uint32_t blocked_input_read_ms = 40;
+
 static void lvgl_rtos_task(void*)
 {
+    bool recording_mode = false;
     while (true) {
         uint32_t next = 8;
         if (_lvgl_update_enabled && lock_gui()) {
             if (_lvgl_update_enabled) {
+                auto* display = lv_display_get_default();
+                const bool touch_blocked = toolbox::touch_input_blocked();
+                if (recording_mode != touch_blocked) {
+                    recording_mode = touch_blocked;
+                    lv_timer_set_period(lv_display_get_refr_timer(display),
+                                        recording_mode ? recording_refresh_ms : display_refresh_ms);
+                    if (auto* input = GetHAL().lvTouchpad)
+                        lv_timer_set_period(lv_indev_get_read_timer(input),
+                                            recording_mode ? blocked_input_read_ms : input_read_ms);
+                }
                 // Wake a paused refresh timer when a static frame needs repair.
-                if (finish_frame(0) && (refresh_deferred || repair_regions.count)) {
-                    auto* timer = lv_display_get_refr_timer(lv_display_get_default());
+                if (can_render() && (refresh_deferred || (!frame_pending && repair_regions.count))) {
+                    auto* timer = lv_display_get_refr_timer(display);
                     lv_timer_resume(timer);
                     lv_timer_ready(timer);
                 }
@@ -536,7 +604,7 @@ static void lvgl_rtos_task(void*)
             }
             unlock_gui();
         }
-        vTaskDelay(pdMS_TO_TICKS(std::clamp<uint32_t>(next, 1, 8)));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(std::clamp<uint32_t>(next, 1, recording_mode ? 20 : 8)));
     }
 }
 
@@ -576,12 +644,19 @@ static void lvgl_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* pi
         return;
     }
     const uint32_t input_us = perf::now() - input_consumed_us < 250000 ? pending_input_us : 0;
-    const DisplayFrame frame = {pixels, dirty_regions, input_us, recent_input_us};
+    const char* marker = boot_frames_enabled.load(std::memory_order_relaxed)
+                             ? (boot_logo ? "splash_dma_us" : home_marker) : nullptr;
+    const DisplayFrame frame = {pixels, dirty_regions, input_us, recent_input_us, marker};
     perf::sample(perf::dirty_pixels, dirty_pixels);
     dirty_regions.count = dirty_pixels = pending_input_us = 0;
-    frame_pending = true;
-    const BaseType_t queued = xQueueSend(frame_queue, &frame, 0);
-    configASSERT(queued == pdTRUE);
+    compose_time_us = esp_timer_get_time() - compose_started_us;
+    if (finish_frame(0)) {
+        queue_frame(frame);
+    } else {
+        configASSERT(!prepared_frame);
+        prepared_frame = frame;
+    }
+    lv_display_flush_ready(disp);
 }
 
 static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -604,6 +679,7 @@ static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         last = *data;
     } else {
         *data = last;
+        if (toolbox::touch_input_blocked()) data->state = LV_INDEV_STATE_RELEASED;
         data->continue_reading = false;
     }
 }
@@ -635,10 +711,9 @@ void Hal::lvgl_init()
     }
     ESP_ERROR_CHECK(buf1 && buf2 && dma_buffers[0] && dma_buffers[1] ? ESP_OK : ESP_ERR_NO_MEM);
     lv_display_set_buffers_with_stride(disp, buf1, buf2, frame_bytes, frame_stride, LV_DISPLAY_RENDER_MODE_DIRECT);
-    lv_display_set_flush_wait_cb(disp, wait_for_frame);
     auto* refresh_timer = lv_display_get_refr_timer(disp);
     lv_timer_set_cb(refresh_timer, refresh_if_ready);
-    lv_timer_set_period(refresh_timer, 16);
+    lv_timer_set_period(refresh_timer, display_refresh_ms);
 #ifdef CONFIG_TOOLBOX_PERF
     lv_display_add_event_cb(disp, measure_refresh, LV_EVENT_ALL, nullptr);
 #endif
@@ -655,7 +730,7 @@ void Hal::lvgl_init()
     lv_indev_set_display(lvTouchpad, disp);
 
     auto* input_timer = lv_indev_get_read_timer(lvTouchpad);
-    lv_timer_set_period(input_timer, 4);
+    lv_timer_set_period(input_timer, input_read_ms);
 #ifdef CONFIG_TOOLBOX_PERF
     lv_timer_set_cb(input_timer, [](lv_timer_t* timer) {
         const auto start = perf::now();
@@ -679,23 +754,34 @@ void Hal::lvgl_init()
     const BaseType_t display_task = xTaskCreatePinnedToCore(display_rtos_task, "display_dma", 4096,
                                                            nullptr, 6, nullptr, 0);
     const BaseType_t gui_task = xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl", 16 * 1024,
-                                                       nullptr, 4, nullptr, 1);
+                                                       nullptr, 4, &lvgl_task, 1);
     ESP_ERROR_CHECK(display_task == pdPASS && gui_task == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_LOGI("Display", "Refresh V6: RGB565_SWAPPED DIRECT, TE GPIO38, 80MHz QSPI, DMA %d rows, touch 4ms", dma_rows);
 
-    startLvglUpdate();
-
     {
         LvglLockGuard lock;
+        ESP_LOGI("Boot", "display_ready_us=%lld", esp_timer_get_time());
+        boot_frames_enabled = true;
         uitk::lvgl_cpp::ScreenActive screen;
         screen.setBgColor(lv_color_black());
-        GetHAL().bootLogo = std::make_unique<BootLogo>();
+        boot_logo = toolbox::ui::boot(lv_screen_active());
     }
+    startLvglUpdate();
 }
 
 bool Hal::lvglLock()
 {
     return lock_gui();
+}
+
+void Hal::presentBootHome()
+{
+    if (!boot_logo) return;
+    lv_obj_delete(boot_logo);
+    boot_logo = nullptr;
+    // Submit the composed home before snapshot work. The normal refresh gate
+    // defers it if DMA still owns the previous buffer.
+    refresh_if_ready(lv_display_get_refr_timer(lv_display_get_default()));
 }
 
 void Hal::lvglUnlock()
@@ -713,6 +799,11 @@ void Hal::stopLvglUpdate()
     _lvgl_update_enabled = false;
     // Preserve exclusive display ownership for direct-M5GFX apps after return.
     xSemaphoreTake(xGuiSemaphore, portMAX_DELAY);
-    wait_for_frame(nullptr);
+    finish_frame(portMAX_DELAY);
+    if (prepared_frame) {
+        queue_frame(*prepared_frame);
+        prepared_frame.reset();
+        finish_frame(portMAX_DELAY);
+    }
     xSemaphoreGive(xGuiSemaphore);
 }

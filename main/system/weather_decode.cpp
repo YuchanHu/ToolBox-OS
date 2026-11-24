@@ -13,13 +13,13 @@ std::string str(cJSON *p, const char *key) {
         return v->valuestring;
     if (cJSON_IsNumber(v)) {
         char text[32];
-        snprintf(text, sizeof(text), "%.0f", v->valuedouble);
+        snprintf(text, sizeof(text), "%.8g", v->valuedouble);
         return text;
     }
     return {};
 }
 } // namespace
-bool decode_weather(WeatherResult &next, cJSON *root, int minutes) {
+bool decode_weather(WeatherResult &next, cJSON *root) {
     auto weather_code = [](const std::string &text) {
         if (text.find("雷") != std::string::npos)
             return text.find("雹") != std::string::npos ? 304 : 302;
@@ -43,44 +43,82 @@ bool decode_weather(WeatherResult &next, cJSON *root, int minutes) {
             return 100;
         return 999;
     };
-    bool success = false;
-    auto *forecast = field(root, "forecast");
-    for (int i = 0; i < cJSON_GetArraySize(forecast); ++i) {
-        auto *p = cJSON_GetArrayItem(forecast, i);
-        for (int j = 0; j < 2; ++j)
-            if (str(p, "date") == next.days[j].date) {
-                auto &d = next.days[j];
-                d.high = str(p, "temp_max");
-                d.low = str(p, "temp_min");
-                d.condition = str(p, "weather_day");
-                d.code = weather_code(d.condition);
-                d.probability = str(p, "precipitation_probability");
-                d.valid = !d.high.empty();
-                d.updated = str(root, "report_time");
-                success |= d.valid;
-            }
+    const auto temperature = str(root, "temperature");
+    const auto report = str(root, "report_time");
+    if (temperature.empty() || report.size() < 16 || str(root, "city").empty()) return false;
+    auto data = std::make_shared<Forecast>();
+    const auto today = report.substr(0, 10);
+    auto &days = data->days;
+    days.emplace_back();
+    days.front().date = today;
+    cJSON *item;
+    cJSON_ArrayForEach(item, field(root, "forecast")) {
+        const auto date = str(item, "date");
+        if (date.size() != 10 || date < today || str(item, "temp_min").empty() || str(item, "temp_max").empty()) continue;
+        if (date > today && (days.size() == 7 || date <= days.back().date)) continue;
+        auto &day = date == today ? days.front() : days.emplace_back();
+        day.date = date;
+        day.week = str(item, "week");
+        day.high = str(item, "temp_max");
+        day.low = str(item, "temp_min");
+        day.day_condition = str(item, "weather_day");
+        day.condition = day.day_condition;
+        day.night_condition = str(item, "weather_night");
+        day.direction = str(item, "wind_dir_day");
+        day.power = str(item, "wind_scale_day");
+        day.wind = str(item, "wind_speed_day");
+        day.humidity = str(item, "humidity");
+        day.precipitation = str(item, "precip");
+        day.uv = str(item, "uv_index");
+        day.sunrise = str(item, "sunrise");
+        day.sunset = str(item, "sunset");
+        day.code = weather_code(day.condition);
+        day.valid = true;
     }
-    if (cJSON_IsNumber(field(root, "temperature"))) {
-        auto &d = next.days[0];
-        d.temperature = str(root, "temperature");
-        d.humidity = str(root, "humidity");
-        d.wind = str(root, "wind_speed");
-        d.condition = str(root, "weather");
-        d.code = weather_code(d.condition);
-        d.updated = str(root, "report_time");
-        d.valid = true;
-        d.night = minutes < 420 || minutes >= 1140;
-        if (auto *today = cJSON_GetArrayItem(forecast, 0)) {
-            auto minutes_of = [](const std::string &value) {
-                return value.size() >= 5 ? atoi(value.substr(0, 2).c_str()) * 60 + atoi(value.substr(3, 2).c_str())
-                                         : -1;
-            };
-            const int rise = minutes_of(str(today, "sunrise")), set = minutes_of(str(today, "sunset"));
-            if (rise >= 0 && set >= 0)
-                d.night = minutes < rise || minutes >= set;
-        }
-        success = true;
+    auto &d = days.front();
+    d.valid = true;
+    d.updated = report;
+    d.temperature = temperature;
+    d.condition = str(root, "weather");
+    if (d.high.empty()) d.high = str(root, "temp_max");
+    if (d.low.empty()) d.low = str(root, "temp_min");
+    auto icon = str(root, "weather_icon");
+    d.code = icon.empty() ? weather_code(d.condition) : atoi(icon.c_str());
+    d.humidity = str(root, "humidity");
+    d.direction = str(root, "wind_direction");
+    d.power = str(root, "wind_power");
+    d.wind = str(root, "wind_speed");
+    d.precipitation = str(root, "precipitation");
+    d.uv = str(root, "uv");
+    d.feels_like = str(root, "feels_like");
+    d.visibility = str(root, "visibility");
+    d.pressure = str(root, "pressure");
+    d.cloud = str(root, "cloud");
+    d.aqi = str(root, "aqi");
+    d.category = str(root, "aqi_category");
+    for (auto key : {"pm25", "pm10", "o3", "no2", "so2", "co"}) {
+        auto value = str(field(root, "air_pollutants"), key);
+        if (!value.empty()) d.pollutants += std::string(key) + " " + value + " ";
     }
-    return success;
+    cJSON_ArrayForEach(item, field(root, "alerts")) {
+        d.warning += str(item, "title") + " ";
+    }
+    const auto hhmm = report.substr(11, 5);
+    d.night = hhmm < (d.sunrise.empty() ? "07:00" : d.sunrise) || hhmm >= (d.sunset.empty() ? "19:00" : d.sunset);
+    auto local_minute = [](std::string stamp) {
+        if (stamp.size() > 10) stamp[10] = ' ';
+        return stamp.substr(0, 16);
+    };
+    const auto report_minute = local_minute(report);
+    cJSON_ArrayForEach(item, field(root, "hourly_forecast")) {
+        auto time = str(item, "time");
+        if (time.size() < 16 || local_minute(time) < report_minute || str(item, "temperature").empty()) continue;
+        data->hours.push_back({time, str(item, "temperature"), str(item, "weather"), str(item, "humidity"),
+            str(item, "wind_direction"), str(item, "wind_speed"), str(item, "pop"), str(item, "precip"), str(item, "feels_like")});
+        if (data->hours.size() == 24) break;
+    }
+    next.city.name = str(root, "city");
+    next.forecast = std::move(data);
+    return true;
 }
 } // namespace toolbox

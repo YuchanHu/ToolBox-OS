@@ -14,7 +14,7 @@ if(${IDF_VER} STRGREATER_EQUAL "v6.0")
         INCLUDE_DIRS
             "include"
         EMBED_TXTFILES
-            "assets/wifi_configuration.html"
+            "${CMAKE_CURRENT_LIST_DIR}/../../main/assets/provision.html"
             "assets/wifi_configuration_done.html"
         REQUIRES "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash"
     )
@@ -32,7 +32,7 @@ else()
         INCLUDE_DIRS
             "include"
         EMBED_TXTFILES
-            "assets/wifi_configuration.html"
+            "${CMAKE_CURRENT_LIST_DIR}/../../main/assets/provision.html"
             "assets/wifi_configuration_done.html"
         REQUIRES "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash" "json"
     )

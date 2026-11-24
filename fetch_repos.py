@@ -6,11 +6,20 @@ import json
 def clone_or_update_repo(
     repo_url, path, ref=None, with_submodules=False, patch_path=None
 ):
-    import os
+    # A source export already contains the pinned and patched components.
+    if os.path.isdir(path) and not os.path.exists(os.path.join(path, ".git")):
+        if not subprocess.check_output(["git", "ls-files", "--", path], cwd=os.path.dirname(os.path.abspath(__file__))).strip():
+            raise RuntimeError(f"Unmanaged dependency directory: {path}")
+        if patch_path:
+            root = os.path.dirname(os.path.abspath(__file__))
+            relative = os.path.relpath(path, root).replace(os.sep, "/")
+            subprocess.run(["git", "apply", "--reverse", "--check", "--directory", relative, patch_path],
+                           cwd=root, check=True)
+        return
 
     if not os.path.exists(path):
         subprocess.run(["git", "clone", repo_url, path], check=True)
-    else:
+    elif ref and subprocess.run(["git", "-C", path, "cat-file", "-e", ref], stderr=subprocess.DEVNULL).returncode:
         subprocess.run(["git", "-C", path, "fetch"], check=True)
 
     if ref:
@@ -37,7 +46,7 @@ def clone_or_update_repo(
             subprocess.run(["git", "-C", path, "apply", patch_full_path], check=True)
             print(f"Applied patch {patch_path} to {path}")
         else:
-            print(f"Patch {patch_path} cannot be applied cleanly to {path}, skipped.")
+            subprocess.run(["git", "-C", path, "apply", "--reverse", "--check", patch_full_path], check=True)
 
 
 def fetch_dependencies():
@@ -49,7 +58,7 @@ def fetch_dependencies():
 
     for repo in repos:
         repo_path = os.path.join(script_dir, repo["path"])
-        branch = repo.get("branch")
+        branch = repo["commit"]
         with_submodules = repo.get("with_submodules", False)
         patch = repo.get("patch")
         if patch and not os.path.isabs(patch):

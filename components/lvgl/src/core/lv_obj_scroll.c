@@ -424,9 +424,10 @@ lv_result_t lv_obj_scroll_by_raw(lv_obj_t * obj, int32_t x, int32_t y)
     obj->spec_attr->scroll.y += y;
 
     lv_obj_move_children_by(obj, x, y, true);
-    lv_result_t res = lv_obj_send_event(obj, LV_EVENT_SCROLL, NULL);
+    bool invalidate_viewport = true;
+    lv_result_t res = lv_obj_send_event(obj, LV_EVENT_SCROLL, &invalidate_viewport);
     if(res != LV_RESULT_OK) return res;
-    lv_obj_invalidate(obj);
+    if(invalidate_viewport) lv_obj_invalidate(obj);
     return LV_RESULT_OK;
 }
 

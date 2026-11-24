@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="466" height="466" viewBox="0 0 466 466">
+  <rect width="466" height="466" fill="#000000"/>
+  <g id="logo" transform="translate(85,66) scale(1.155)" fill="none"
+     stroke="#F3F7FC" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M103 65V48C103 44 106 41 110 41H146C150 41 153 44 153 48V65"/>
+    <rect x="61" y="65" width="134" height="127" rx="21"/>
+    <path d="M128 97V128L157 143"/>
+  </g>
+  <text x="233" y="349" text-anchor="middle" font-family="MiSans" font-size="32"
+        font-weight="600" fill="#F3F7FC">ToolBox OS</text>
+</svg>

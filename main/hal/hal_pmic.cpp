@@ -6,13 +6,12 @@
 #include "hal.h"
 #include <mooncake_log.h>
 #include <M5PM1.h>
-#include <algorithm>
 #include <memory>
 #include <mutex>
-#include <cmath>
 
 static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
+
 void Hal::powerOff()
 {
     if (_pm1) _pm1->shutdown();
@@ -20,75 +19,50 @@ void Hal::powerOff()
 
 namespace {
 
-uint8_t battery_millivolts_to_percent(uint16_t millivolts)
+constexpr auto charge_status_pin = M5PM1_GPIO_NUM_2;
+constexpr auto charge_program_pin = M5PM1_GPIO_NUM_3;
+constexpr uint32_t battery_sample_period_ms = 1000;
+toolbox::BatteryMonitor battery_monitor;
+toolbox::BatteryStatus battery_status;
+std::mutex battery_status_mutex;
+
+void sample_battery()
 {
-    constexpr uint16_t _battery_mv_empty = 3300;
-    constexpr uint16_t _battery_mv_full  = 4200;
-
-    if (millivolts <= _battery_mv_empty) {
-        return 0;
-    }
-    if (millivolts >= _battery_mv_full) {
-        return 100;
-    }
-
-    const auto scaled =
-        static_cast<uint32_t>(millivolts - _battery_mv_empty) * 100U / (_battery_mv_full - _battery_mv_empty);
-    return static_cast<uint8_t>(std::min<uint32_t>(scaled, 100U));
-}
-
-constexpr uint32_t _bat_reading_period_ms = 1000;
-constexpr uint16_t _bat_filter_weight_old = 7;
-constexpr uint16_t _bat_filter_weight_new = 1;
-constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter_weight_new;
-
-uint8_t _bat_level        = 0;
-uint16_t _bat_filtered_mv = 0;
-std::mutex _bat_level_mutex;
-
-void update_bat_level(uint8_t level)
-{
-    std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    _bat_level = level;
-}
-
-void update_bat_level_from_mv(uint16_t millivolts)
-{
-    if (_bat_filtered_mv == 0) {
-        _bat_filtered_mv = millivolts;
-    } else {
-        const uint32_t filtered = static_cast<uint32_t>(_bat_filtered_mv) * _bat_filter_weight_old +
-                                  static_cast<uint32_t>(millivolts) * _bat_filter_weight_new;
-        _bat_filtered_mv = static_cast<uint16_t>((filtered + (_bat_filter_weight_sum / 2)) / _bat_filter_weight_sum);
+    uint16_t battery_mv = 0;
+    uint16_t input_mv = 0;
+    uint8_t charge_status = 1;
+    if (_pm1->readVbat(&battery_mv) != M5PM1_OK ||
+        _pm1->readVin(&input_mv) != M5PM1_OK ||
+        _pm1->gpioGetInput(charge_status_pin, &charge_status) != M5PM1_OK) {
+        battery_monitor.missed_sample();
+        return;
     }
 
-    update_bat_level(battery_millivolts_to_percent(_bat_filtered_mv));
+    const auto next = battery_monitor.sample(battery_mv, input_mv, charge_status == 0);
+    toolbox::BatteryStatus previous;
+    {
+        std::lock_guard<std::mutex> lock(battery_status_mutex);
+        previous = battery_status;
+        battery_status = next;
+    }
+    static bool first_sample = true;
+    if (first_sample || previous.external_power != next.external_power || previous.charging != next.charging ||
+        (previous.percent == 100) != (next.percent == 100)) {
+        mclog::tagInfo(_tag, "battery: vbat={} mV vin={} mV chg_stat={} level={}%",
+                       battery_mv, input_mv, charge_status, next.percent);
+        first_sample = false;
+    }
 }
 
-void bat_reading_task(void* param)
+void bat_reading_task(void*)
 {
-    mclog::tagInfo(_tag, "start bat reading task");
-
     while (true) {
-        if (_pm1) {
-            uint16_t battery_mv = 0;
-            if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
-                update_bat_level_from_mv(battery_mv);
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(_bat_reading_period_ms));
+        vTaskDelay(pdMS_TO_TICKS(battery_sample_period_ms));
+        sample_battery();
     }
 }
 
 }  // namespace
-
-// PMIC IO
-#define PMG0_RTC_IMU_INT M5PM1_GPIO_NUM_0
-#define PMG2_CHG_STAT    M5PM1_GPIO_NUM_2
-#define PMG4_PORT_INT    M5PM1_GPIO_NUM_4
-#define PMG3_CHG_PROG    M5PM1_GPIO_NUM_3
-#define PMG1_G12_PY_IRQ  M5PM1_GPIO_NUM_1
 
 void Hal::pmic_init()
 {
@@ -102,7 +76,6 @@ void Hal::pmic_init()
     }
 
     _pm1->setI2cSleepTime(0);
-    _pm1->setI2cSleepTime(0);
 
     // set button delay click 1s
     _pm1->btnSetConfig(M5PM1_BTN_TYPE_CLICK, M5PM1_BTN_CLICK_DELAY_1000MS);
@@ -111,24 +84,25 @@ void Hal::pmic_init()
     //  hold LDO power close when power off, keep power for RTC
     _pm1->ldoSetPowerHold(true);
 
-    // set charge enable or disable, this setting will keep working after power off
-    _pm1->setChargeEnable(true);
-
-    // drive CHG_PROG low to force active charge programming
-    _pm1->gpioSet(PMG3_CHG_PROG, M5PM1_GPIO_MODE_OUTPUT, 0, M5PM1_GPIO_PULL_NONE, M5PM1_GPIO_DRIVE_PUSHPULL);
-
-    _pm1->gpioSetFunc(PMG2_CHG_STAT, M5PM1_GPIO_FUNC_GPIO);
-    _pm1->gpioSetMode(PMG2_CHG_STAT, M5PM1_GPIO_MODE_INPUT);
-    _pm1->gpioSetPull(PMG2_CHG_STAT, M5PM1_GPIO_PULL_NONE);
-
+    // Enable charging through shutdown and use the existing 425 mA profile.
+    const auto charge_enable = _pm1->setChargeEnable(true);
+    const auto charge_program = _pm1->gpioSet(charge_program_pin, M5PM1_GPIO_MODE_OUTPUT, 0,
+                                             M5PM1_GPIO_PULL_NONE, M5PM1_GPIO_DRIVE_PUSHPULL);
+    const auto status_func = _pm1->gpioSetFunc(charge_status_pin, M5PM1_GPIO_FUNC_GPIO);
+    const auto status_mode = _pm1->gpioSetMode(charge_status_pin, M5PM1_GPIO_MODE_INPUT);
+    const auto status_pull = _pm1->gpioSetPull(charge_status_pin, M5PM1_GPIO_PULL_NONE);
+    if (charge_enable != M5PM1_OK || charge_program != M5PM1_OK || status_func != M5PM1_OK ||
+        status_mode != M5PM1_OK || status_pull != M5PM1_OK) {
+        mclog::tagWarn(_tag, "charger init: enable={} program={} status func={} mode={} pull={}",
+                       static_cast<int>(charge_enable), static_cast<int>(charge_program), static_cast<int>(status_func),
+                       static_cast<int>(status_mode), static_cast<int>(status_pull));
+    }
     _pm1->setSingleResetDisable(true);
 
-    uint16_t battery_mv = 0;
-    if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
-        update_bat_level_from_mv(battery_mv);
+    sample_battery();
+    if (xTaskCreate(bat_reading_task, "bat_reading", 4 * 1024, nullptr, 1, nullptr) != pdPASS) {
+        mclog::tagWarn(_tag, "could not start battery sampler");
     }
-
-    xTaskCreate(bat_reading_task, "bat_reading", 4 * 1024, NULL, 1, NULL);
 }
 
 bool Hal::pmic_get_pwr_btn_state()
@@ -147,32 +121,19 @@ void Hal::setPowerLed(bool enabled)
     }
 }
 
+toolbox::BatteryStatus Hal::getBatteryStatus()
+{
+    std::lock_guard<std::mutex> lock(battery_status_mutex);
+    return battery_status;
+}
+
 uint8_t Hal::getBatteryLevel()
 {
-    std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    return _bat_level;
+    return getBatteryStatus().percent;
 }
 
 bool Hal::isBatteryCharging(bool strict)
 {
-    if (!_pm1) {
-        return false;
-    }
-
-    uint16_t vin_mv       = 0;
-    uint8_t charge_status = 1;
-
-    const auto vin_result = _pm1->readVin(&vin_mv);
-    const auto chg_result = _pm1->gpioGetInput(PMG2_CHG_STAT, &charge_status);
-    if (vin_result != M5PM1_OK || chg_result != M5PM1_OK) {
-        return false;
-    }
-
-    const bool external_power_inserted = vin_mv > 4000;
-    const bool charging_active         = charge_status == 0;
-
-    if (strict) {
-        return external_power_inserted && charging_active;
-    }
-    return external_power_inserted;
+    const auto status = getBatteryStatus();
+    return strict ? status.charging : status.external_power;
 }

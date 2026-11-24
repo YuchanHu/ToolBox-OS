@@ -14,7 +14,27 @@
 
 脚本使用 `IDF_PATH`、`IDF_PYTHON_ENV_PATH` 和当前 `PATH`。需要初始化时调用所选 ESP-IDF 的导出脚本。VS Code ESP-IDF 扩展和默认命令行构建都使用 `build-toolbox`。ESP-IDF 安装路径与串口在扩展的用户设置中选择。
 
-首次烧录使用 `idf.py -B build-toolbox -p PORT flash monitor`。已使用相同分区布局并确认启动槽时，可用 `idf.py -B build-toolbox -p PORT app-flash monitor` 更新应用分区。
+### 从 1.1 迁移
+
+先备份重要文件和配置，并核对旧分区表。以下偏移适用于仓库默认的 16 MiB 未加密 1.1 固件。新旧 FAT 物理区域有重叠。请在任何写入前完成备份，并把镜像保存在项目外。原始 Flash 含有 Wi-Fi 等配置。
+
+```powershell
+python -m esptool --chip esp32s3 -p PORT read_flash 0xA00000 0x400000 storage-v11.bin
+python -m esptool --chip esp32s3 -p PORT read_flash 0x9000 0x4000 nvs-v11.bin
+```
+
+在构建目录执行下列命令，用实际备份路径替换 FAT_BACKUP。这样 bootloader、分区表、应用和迁移的 FAT 卷会在同次 USB 写入结束后启动。NVS 偏移保持 0x9000。
+
+```powershell
+python -m esptool --chip esp32s3 -p PORT write_flash "@flash_args" 0xBF0000 FAT_BACKUP
+```
+
+单 Factory 分区已移除 A/B 双槽 OTA。后续使用 `idf.py -B build-toolbox -p PORT flash monitor` 或仅更新应用的 `app-flash`。挂载失败会保留卷并记录错误。全新空白设备可以用以下步骤准备 4 MiB 空卷，然后将 empty-storage.bin 作为上述 FAT_BACKUP 烧入。已经有数据的设备使用自己的备份。
+
+```powershell
+New-Item -ItemType Directory empty-volume
+python "$env:IDF_PATH/components/fatfs/wl_fatfsgen.py" empty-volume --partition_size 0x400000 --sector_size 4096 --output_file empty-storage.bin
+```
 
 ## 同源 LVGL 桌面渲染
 

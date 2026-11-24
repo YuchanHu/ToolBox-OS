@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <hal/battery_monitor.h>
 #include <hal/utils/button/Button_Class.hpp>
 extern bool preview_analog;
 inline std::tm* toolbox_preview_localtime(const std::time_t* time, std::tm* result)
@@ -27,7 +28,14 @@ struct Hal {
         std::string ssid = "Studio_2.4G", ipAddress = "192.168.1.108";
         std::string apSsid = "M5StopWatch-A1B2", apUrl = "http://192.168.4.1";
     };
-    std::unique_ptr<int> bootLogo;
+    lv_obj_t* boot_logo = nullptr;
+    void presentBootHome()
+    {
+        if (!boot_logo) return;
+        lv_obj_delete(boot_logo);
+        boot_logo = nullptr;
+        lv_refr_now(nullptr);
+    }
     lv_indev_t* lvTouchpad = nullptr;
     WifiStatus network;
     m5::Button_Class btnA, btnB;
@@ -45,8 +53,10 @@ struct Hal {
     void updateButtonStates() { btnA.setRawState(millis(), rawA); btnB.setRawState(millis(), rawB); }
     int battery_percent = 82;
     int getBatteryLevel() { return battery_percent; }
+    bool external_power = false;
     bool charging = false;
-    bool isBatteryCharging(bool = false) { return charging; }
+    bool isBatteryCharging(bool strict = false) { return strict ? charging : external_power; }
+    toolbox::BatteryStatus getBatteryStatus() { return {static_cast<uint8_t>(battery_percent), external_power, charging}; }
     bool isWifiEnabled() { return network.enabled; }
     WifiStatus getWifiStatus() { return network; }
     int brightness=65;

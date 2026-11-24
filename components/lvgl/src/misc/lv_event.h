@@ -49,7 +49,7 @@ typedef enum {
     LV_EVENT_SCROLL_BEGIN,        /**< Scrolling begins. The event parameter is a pointer to the animation of the scroll. Can be modified */
     LV_EVENT_SCROLL_THROW_BEGIN,
     LV_EVENT_SCROLL_END,          /**< Scrolling ends */
-    LV_EVENT_SCROLL,              /**< Scrolling */
+    LV_EVENT_SCROLL,              /**< Scrolling. If the bool pointer parameter is set to false, the handler invalidates its own regions. */
     LV_EVENT_GESTURE,             /**< A gesture is detected. Get gesture with `lv_indev_get_gesture_dir(lv_indev_active());` */
     LV_EVENT_KEY,                 /**< A key is sent to Widget. Get key with `lv_indev_get_key(lv_indev_active());`*/
     LV_EVENT_ROTARY,              /**< An encoder or wheel was rotated. Get rotation count with `lv_event_get_rotary_diff(e);`*/

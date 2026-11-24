@@ -43,6 +43,16 @@ LV_IMAGE_DECLARE(toolbox_icon_weather_28);
 LV_IMAGE_DECLARE(toolbox_icon_weather_78);
 LV_IMAGE_DECLARE(toolbox_icon_wifi_28);
 LV_IMAGE_DECLARE(toolbox_icon_wifi_78);
+LV_IMAGE_DECLARE(toolbox_camera_photo);
+LV_IMAGE_DECLARE(toolbox_camera_photo_small);
+LV_IMAGE_DECLARE(toolbox_camera_movie);
+LV_IMAGE_DECLARE(toolbox_camera_search);
+LV_IMAGE_DECLARE(toolbox_camera_connect);
+LV_IMAGE_DECLARE(toolbox_camera_bluetooth);
+LV_IMAGE_DECLARE(toolbox_camera_check);
+LV_IMAGE_DECLARE(toolbox_camera_warning);
+LV_IMAGE_DECLARE(toolbox_camera_back);
+LV_IMAGE_DECLARE(toolbox_camera_right);
 #ifdef __cplusplus
 }
 #endif
