@@ -3,6 +3,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
 endif()
 file(GLOB_RECURSE MY_SRCS ${track_source_changes}
     "apps/app_camera/*.cpp"
+    "apps/app_lighting/*.cpp"
     "apps/app_counter/*.cpp"
     "apps/app_timers/*.cpp"
     "apps/app_focus/*.cpp"
@@ -28,6 +29,7 @@ list(APPEND MY_SRCS
     "assets/camera_remote_icons.c"
     "assets/boot_logo.c"
     "assets/app_icons.c"
+    "assets/lighting_icon.c"
     "assets/images/icon_indicator_left.c"
     "assets/images/icon_indicator_right.c"
     "assets/images/icon_badge.c"

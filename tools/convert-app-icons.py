@@ -4,11 +4,14 @@ from pathlib import Path
 from PIL import Image
 
 root = Path(__file__).resolve().parent.parent
-names = ("stopwatch", "settings", "camera", "counter", "timers", "focus", "level", "weather")
+names = ("stopwatch", "settings", "camera", "counter", "timers", "focus", "level", "weather", "lighting")
 display_size = 166
 output = ['#include <lvgl.h>', '']
 declarations = ['#pragma once', '#include <lvgl.h>', '#ifdef __cplusplus', 'extern "C" {', '#endif']
 for name in names:
+    if name == "lighting":
+        (root / "main/assets/app_icons.c").write_text("\n".join(output), encoding="utf-8")
+        output = ['#include <lvgl.h>', '']
     image = Image.open(root / "output/app-icons" / f"{name}.png").convert("RGB")
     if image.size != (150, 150):
         raise ValueError(f"{name} must be exactly 150 x 150 pixels")
@@ -31,5 +34,5 @@ for name in names:
     ])
     declarations.append(f"LV_IMAGE_DECLARE({symbol});")
 declarations.extend(['#ifdef __cplusplus', '}', '#endif', ''])
-(root / "main/assets/app_icons.c").write_text("\n".join(output), encoding="utf-8")
+(root / "main/assets/lighting_icon.c").write_text("\n".join(output), encoding="utf-8")
 (root / "main/system/app_icons.h").write_text("\n".join(declarations), encoding="utf-8")
