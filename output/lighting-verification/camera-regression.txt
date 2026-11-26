@@ -1,0 +1,3 @@
+Passed production Sony GATT state machine: authentication, subscription, photo sequence, early/late recording feedback, busy rejection, timeout, reconnect and close
+Sony PTP/IP simulation passed
+Sony provisioning: multi-tap, timeout, modes, printable ASCII, form decoding and bounds passed

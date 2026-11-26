@@ -1,0 +1,182 @@
+{
+  "inkee_pair": "7f6d3f654206fffffffe103412010200",
+  "inkee_power": "7f6d3f65420634120102410001010000",
+  "inkee_brightness": "7f6d3f65420634120102430001002500",
+  "inkee_temperature": "7f6d3f654206341201024600012a0000",
+  "lyd_cct": "0215faa500001111abcd0123be890000000d0002560025",
+  "lyd_hsi": "0215faa500001111abcd0123be890000000dc30200dd25",
+  "lyd_off": "0215faa500001111abcd0123be890000000d0002560000",
+  "yn_modern_cct": [
+    "ae0106070156",
+    "ae030a0710cc250064",
+    "ae0f0707fc56"
+  ],
+  "yn_modern_hsi": [
+    "ae0106070156",
+    "ae07090700dd4325"
+  ],
+  "yn_modern_off": [
+    "ae0106070056"
+  ],
+  "yn_modern-decimal_cct": [
+    "ae0106070156",
+    "ae03090710cc25a004",
+    "ae0f0707fc56"
+  ],
+  "yn_modern-decimal_hsi": [
+    "ae0106070156",
+    "ae07090700dd4325a004"
+  ],
+  "yn_modern-decimal_off": [
+    "ae0106070056"
+  ],
+  "yn_legacy_cct": [
+    "aeaa07111456"
+  ],
+  "yn_legacy_hsi": [
+    "ae80a1aa070c142500000056"
+  ],
+  "yn_legacy_off": [
+    "aeee070000"
+  ],
+  "yn_legacy-rgb_cct": [
+    "aeaa07111456"
+  ],
+  "yn_legacy-rgb_hsi": [
+    "ae80a1aa070c142500000056"
+  ],
+  "yn_legacy-rgb_off": [
+    "aeee070000"
+  ],
+  "yn_legacy-360_cct": [
+    "aeaa01111456"
+  ],
+  "yn_legacy-360_hsi": [
+    "aea11f345f56"
+  ],
+  "yn_legacy-360_off": [
+    "aeee00000056"
+  ],
+  "sidus_cct": [
+    "8d00000000000000018c",
+    "1900000000c0e09a5d82"
+  ],
+  "sidus_hsi": [
+    "8d00000000000000018c",
+    "e900000000c0b09b5d81"
+  ],
+  "sidus_off": [
+    "8c00000000000000008c"
+  ],
+  "godox_cct": [
+    "f0252b2e00fc0441",
+    "fe00ffffffffff7f",
+    "fe00ffffffffff7f"
+  ],
+  "godox_hsi": [
+    "f125dd0043000422",
+    "fe00ffffffffff7f",
+    "fe00ffffffffff7f"
+  ],
+  "godox_off": [
+    "fe01ffffffffff48",
+    "fe01ffffffffff48"
+  ],
+  "lumin_cct": [
+    "0d010e00",
+    "01cc10603d01",
+    "007601017800"
+  ],
+  "lumin_hsi": [
+    "0d010e00",
+    "02dd00432201",
+    "007601027900"
+  ],
+  "lumin_off": [
+    "0d000d00"
+  ],
+  "jinbei_cct": [
+    "7e0103017e",
+    "7e2e03007e",
+    "7e3d03007e",
+    "7e0b032b7e",
+    "7e1303067e",
+    "7e0f03257e"
+  ],
+  "jinbei_hsi": [
+    "7e0103017e",
+    "7e2e03007e",
+    "7e3d03017e",
+    "7e0d0500dd437e",
+    "7e0f03257e"
+  ],
+  "jinbei_off": [
+    "7e0303017e"
+  ],
+  "ulanzi_cct": [
+    "ffa1010000aa",
+    "ffa1010202aa",
+    "ffa30210ccdcaa",
+    "ffa5010606aa",
+    "ffa2012525aa"
+  ],
+  "zhiyun_cct": [
+    "243c0b00000101000210038001cc10d3bb",
+    "243c0d00000102000110038001000014429374"
+  ],
+  "ulanzi_hsi": [
+    "ffa1010000aa",
+    "ffa1010303aa",
+    "ffa40300dd4320aa",
+    "ffa2012525aa"
+  ],
+  "zhiyun_hsi": [
+    "243c0b00000101000210038001cc10d3bb",
+    "243c0d00000102000110038001000014429374"
+  ],
+  "ulanzi_off": [
+    "ffa1010101aa"
+  ],
+  "zhiyun_off": [
+    "243c0d000001010001100380010000000058ab"
+  ],
+  "xsj_join": [
+    "889912ff1301610555574c5abc9a78563412341288",
+    "889912ff130a620355574c5a34123a062601008817"
+  ],
+  "xsj_control": [
+    "889912ff130a630355574c5a34123a0600010163ce",
+    "889915ff160a640355574c5a34123a0614042510cc0a8417",
+    "889915ff160a650355574c5a34123a0614042510cc0a8418",
+    "889915ff160a660355574c5a34123a0614042510cc0a8419"
+  ],
+  "nanlite_cct": [
+    "fa55001b01002401010101010b002502020110cc",
+    "ffd801047e0d0a"
+  ],
+  "nanlite_hsi": [
+    "fa5500180101240101010101080025030100dd43",
+    "02e40d0a"
+  ],
+  "inkee_min_brightness": "7f6d3f65420634120102430001000000",
+  "inkee_max_brightness": "7f6d3f65420634120102430001006400",
+  "inkee_min_cct": "7f6d3f65420634120102460001000000",
+  "inkee_max_cct": "7f6d3f65420634120102460001640000",
+  "yn_channel_query": [
+    "ae220456",
+    "ae3300000056"
+  ],
+  "yn_150ultrabi_picker": [
+    "ae0106070156",
+    "ae030907161241a001"
+  ],
+  "sidus_picker": [
+    "8d00000000000000018c",
+    "1700000000c050e3a282"
+  ],
+  "sidus_fixed": [
+    "8d00000000000000018c",
+    "f1000000000000c0a28f"
+  ],
+  "lyd_cct_rounding": "0215faa500001111abcd0123be890000000d0002720041"
+}
