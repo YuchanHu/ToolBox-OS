@@ -11,6 +11,7 @@ LV_IMAGE_DECLARE(toolbox_app_timers);
 LV_IMAGE_DECLARE(toolbox_app_focus);
 LV_IMAGE_DECLARE(toolbox_app_level);
 LV_IMAGE_DECLARE(toolbox_app_weather);
+LV_IMAGE_DECLARE(toolbox_app_lighting);
 #ifdef __cplusplus
 }
 #endif

@@ -16,9 +16,14 @@ extern void advance(unsigned);
 extern void screenshot(const char *);
 extern void require(bool, const char *);
 extern lv_obj_t *find_text(lv_obj_t *, const char *);
+extern void require_menu_row(lv_obj_t*, const char*);
+extern std::vector<uint32_t> framebuffer;
+extern unsigned flushed_pixels;
+extern bool full_render;
 
 namespace audio {
 void play_tone(int, float, float) {}
+void play_tone_from_midi(int, float, float) { ++GetHAL().tone_count; }
 void stop() {}
 } // namespace audio
 namespace toolbox {
@@ -89,6 +94,20 @@ void check_extensions() {
     level.sample(0, 0, 0, bias, target, true);
     require(!level.valid, "Invalid gravity cannot become a level reading");
 
+    {
+        auto* cached = cJSON_Parse(R"({"query":"adcode:110000","saved":1794999600,"city":"北京",
+            "report_time":"2026-11-17 19:00:00","temperature":7,
+            "hours":[["2026-11-17 20:00:00","6","5","0"]]})");
+        WeatherResult result;
+        result.city.name = "东京";
+        require(!decode_cached_weather(result, cached, "city:东京") && result.city.name == "东京" && !result.forecast,
+                "A weather cache from another city must not replace the current city or its forecast");
+        require(decode_cached_weather(result, cached, "adcode:110000") && result.city.name == "北京" &&
+                result.forecast->hours.size() == 1 && result.forecast->hours.front().temperature == "6",
+                "The compact offline forecast must restore the matching city's hourly samples");
+        cJSON_Delete(cached);
+    }
+
     for (auto kind : {Extension::Level, Extension::Focus, Extension::Timers, Extension::Counter, Extension::Weather}) {
         ExtensionViewState state;
         state.kind = kind;
@@ -122,6 +141,17 @@ void check_extensions() {
             require(!view.controls_visible(), "Faded controls must leave hit testing");
         }
         if (kind == Extension::Level) {
+            lv_refr_now(nullptr);
+            flushed_pixels = 0;
+            state.direction = 138.5;
+            view.update(state, lv_tick_get());
+            lv_refr_now(nullptr);
+            if (!full_render)
+                require(flushed_pixels > 0 && flushed_pixels < 4000, "Moving the level arrow must refresh only its two positions");
+            const auto partial_arrow = framebuffer;
+            lv_obj_invalidate(lv_screen_active());
+            lv_refr_now(nullptr);
+            require(framebuffer == partial_arrow, "Level pointer motion must match a complete redraw with no old pixels");
             state.error = 0;
             state.angle = 0;
             view.update(state, lv_tick_get());
@@ -133,6 +163,9 @@ void check_extensions() {
             view.update(state, lv_tick_get());
             advance(40);
             screenshot("level-pin");
+            state.page = ExtensionPage::Settings;
+            view.update(state, lv_tick_get());
+            screenshot("level-settings");
         }
         if (kind == Extension::Counter) {
             state.confirm = true;
@@ -178,6 +211,13 @@ void check_extensions() {
             lv_obj_send_event(keyboard,LV_EVENT_VALUE_CHANGED,nullptr);
             require(view.take_event().action==ExtensionAction::Search,"Keyboard OK starts city search");
             screenshot("weather-city");
+            lv_textarea_set_text(lv_keyboard_get_textarea(keyboard), "beijing");
+            ++state.weather.revision;
+            state.weather.cities = {{"city", "北京", "北京"}};
+            state.weather.message = "选择城市";
+            view.update(state, lv_tick_get());
+            require_menu_row(lv_screen_active(), "北京");
+            screenshot("weather-city-results");
         }
     }
     {

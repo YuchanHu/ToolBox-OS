@@ -29,13 +29,9 @@ static class AudioCodec {
 public:
     static constexpr int sample_rate       = 44100;
 
-    void init(i2c_master_bus_handle_t i2c_bus)
+    void init(i2c_master_bus_handle_t i2c_bus, void (*set_amp)(bool))
     {
-        _silence_buffer.resize(sample_rate * 0.1);
-        _silence_buffer.assign(_silence_buffer.size(), 0);
-        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 4 * 1024, this, 5,
-                    &_task_handle);
-
+        _set_amp = set_amp;
         _i2s_init();
 
         audio_codec_i2s_cfg_t i2s_cfg = {
@@ -74,6 +70,9 @@ public:
             .sample_rate     = sample_rate,
         };
         esp_codec_dev_open(_codec_dev, &fs);
+        const auto created = xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); },
+                                         "audio_task", 4 * 1024, this, 5, &_task_handle);
+        ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     }
 
     void setVolume(int volume)
@@ -82,35 +81,37 @@ public:
         esp_codec_dev_set_out_vol(_codec_dev, volume);
     }
 
-    int getVolume()
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        int volume = 0;
-        esp_codec_dev_get_out_vol(_codec_dev, &volume);
-        return volume;
-    }
-
-    void setMicGain(float gain)
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
-    }
-
     void play(std::vector<int16_t>& data, bool async)
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        if (_camera_muted) return;
         if (async) {
             // Support interruption: overwrite data and notify task
-            _audio_data = data;
-            _is_playing = true;
+            _audio_data.swap(data);
+            _is_playing = _is_playing || !_audio_data.empty();
             xTaskNotifyGive(_task_handle);
-        } else {
+        } else if (!data.empty()) {
             if (_is_playing) {
                 mclog::tagWarn(_tag, "audio is playing");
                 return;
             }
-            _write(data);
+            _set_amp(true);
+            esp_codec_dev_write(_codec_dev, data.data(), data.size() * sizeof(int16_t));
+            _write_silence();
+            _set_amp(false);
         }
+    }
+
+    void setCameraMute(bool muted)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_camera_muted == muted) return;
+        if (muted) {
+            _audio_data.clear();
+            if (_is_playing) xTaskNotifyGive(_task_handle);
+        }
+        esp_codec_dev_set_out_mute(_codec_dev, muted);
+        _camera_muted = muted;
     }
 
     void record(std::vector<int16_t>& data, uint16_t durationMs, float gain)
@@ -135,27 +136,28 @@ private:
     void _task_entry()
     {
         mclog::tagInfo(_tag, "start audio play task");
-        std::vector<int16_t> current_data;
-
         while (1) {
             // Wait for play request
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+            bool amp_on = false;
             while (true) {
+                std::vector<int16_t> current_data;
                 // Fetch data safely
                 {
                     std::lock_guard<std::mutex> lock(_mutex);
+                    ulTaskNotifyTake(pdTRUE, 0);
                     if (_audio_data.empty()) {
+                        if (amp_on) _set_amp(false);
                         _is_playing = false;
                         break;
                     }
-                    current_data = _audio_data;
-                    _audio_data.clear();
+                    current_data.swap(_audio_data);
                     _is_playing = true;
                 }
-
-                if (current_data.empty()) {
-                    break;
+                if (!amp_on) {
+                    _set_amp(true);
+                    amp_on = true;
                 }
 
                 size_t offset        = 0;
@@ -186,17 +188,19 @@ private:
                     continue;
                 }
 
-                // Normal finish, play silence to avoid pop/waiting
-                esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                    _silence_buffer.size() * sizeof(int16_t));
+                _write_silence();
             }
         }
     }
 
-    void _write(const std::vector<int16_t>& data)
+    void _write_silence()
     {
-        esp_codec_dev_write(_codec_dev, (void*)data.data(), data.size() * sizeof(int16_t));
-        esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(), _silence_buffer.size() * sizeof(int16_t));
+        // Drain queued samples before powering down the amplifier.
+        int16_t silence[256]{};
+        for (int samples = sample_rate / 10; samples > 0; samples -= 256) {
+            if (esp_codec_dev_write(_codec_dev, silence, std::min(samples, 256) * sizeof(int16_t)) != ESP_OK)
+                break;
+        }
     }
 
     void _i2s_init()
@@ -204,6 +208,7 @@ private:
         mclog::tagInfo(_tag, "i2s init");
 
         i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
+        chan_cfg.auto_clear_after_cb = true;
         i2s_std_config_t std_cfg   = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
             .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -233,19 +238,20 @@ private:
     const audio_codec_if_t* _codec_if     = NULL;
 
     TaskHandle_t _task_handle;
+    void (*_set_amp)(bool) = nullptr;
     std::mutex _mutex;
     std::vector<int16_t> _audio_data;
-    std::vector<int16_t> _silence_buffer;
     bool _is_playing = false;
+    bool _camera_muted = false;
 } _audio_codec;
 
 void Hal::audio_init()
 {
     mclog::tagInfo(_tag, "init");
 
-    _audio_codec.init(i2c_bus_get_internal_bus_handle(_i2c_bus));
-
-    ioe_speaker_enable(true);
+    _audio_codec.init(i2c_bus_get_internal_bus_handle(_i2c_bus), [](bool enabled) {
+        GetHAL().ioe_speaker_enable(enabled);
+    });
 
     // Load volume from settings
     setSpeakerVolume(getSpeakerVolume(true), false);
@@ -253,31 +259,23 @@ void Hal::audio_init()
 
 void Hal::setSpeakerVolume(int volume, bool saveToSettings)
 {
-    _spk_volume = volume;
-    _spk_volume = uitk::clamp(_spk_volume, 0, 100);
-
-    mclog::tagInfo(_tag, "set speaker volume to {}", _spk_volume);
-    _audio_codec.setVolume(_spk_volume);
+    volume = uitk::clamp(volume, 0, 100);
+    _audio_codec.setVolume(volume);
+    _spk_volume.store(volume, std::memory_order_relaxed);
 
     if (saveToSettings) {
         Settings settings(std::string(Hal::SettingsNs), true);
-        settings.SetInt("spk_vol", _spk_volume);
-        mclog::tagInfo(_tag, "volume saved to settings: {}", _spk_volume);
+        settings.SetInt("spk_vol", volume);
     }
 }
 
 int Hal::getSpeakerVolume(bool loadFromSettings)
 {
-    _spk_volume = _audio_codec.getVolume();
-
     if (loadFromSettings) {
         Settings settings(std::string(Hal::SettingsNs), false);
-        _spk_volume = settings.GetInt("spk_vol", 80);
-        _spk_volume = uitk::clamp(_spk_volume, 0, 100);
-        mclog::tagInfo(_tag, "volume loaded from settings: {}", _spk_volume);
+        return uitk::clamp(settings.GetInt("spk_vol", 80), 0, 100);
     }
-
-    return _spk_volume;
+    return _spk_volume.load(std::memory_order_relaxed);
 }
 
 void Hal::audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain)
@@ -285,36 +283,17 @@ void Hal::audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gai
     _audio_codec.record(data, durationMs, gain);
 }
 
-void Hal::audioPlay(std::vector<int16_t>& data, bool async)
+void Hal::audioPlay(std::vector<int16_t> data, bool async)
 {
     _audio_codec.play(data, async);
+}
+
+void Hal::setCameraRecordingMute(bool muted)
+{
+    _audio_codec.setCameraMute(muted);
 }
 
 int Hal::getAudioSampleRate()
 {
     return _audio_codec.sample_rate;
-}
-
-namespace {
-
-extern const uint8_t _boot_sfx_start[] asm("_binary_boot_sfx_bin_start");
-extern const uint8_t _boot_sfx_end[] asm("_binary_boot_sfx_bin_end");
-
-}  // namespace
-
-void Hal::playBootSfx()
-{
-    mclog::tagInfo(_tag, "play boot sfx");
-
-    const std::size_t byte_count = _boot_sfx_end - _boot_sfx_start;
-    if (byte_count == 0 || (byte_count % sizeof(int16_t)) != 0) {
-        mclog::tagError(_tag, "boot sfx binary has invalid size: {}", byte_count);
-        return;
-    }
-
-    const auto* samples     = reinterpret_cast<const int16_t*>(_boot_sfx_start);
-    const std::size_t count = byte_count / sizeof(int16_t);
-    std::vector<int16_t> pcm(samples, samples + count);
-
-    audioPlay(pcm, true);
 }

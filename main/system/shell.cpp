@@ -20,8 +20,8 @@
 namespace toolbox {
 namespace {
 constexpr uint32_t accent = 0x9dc6ff;
-constexpr int wipe_height = 466;
-lv_obj_t *drawer, *lockscreen, *digital, *date_label, *status, *dial;
+constexpr int wipe_height = ui::screen_diameter;
+lv_obj_t *drawer, *lockscreen, *lock_content, *digital, *date_label, *status, *dial;
 lv_obj_t *overlay, *clock_panel, *clock_time, *clock_battery, *controls;
 lv_obj_t *control_battery, *wifi_button, *settings, *dial_date, *dial_battery;
 lv_obj_t *brightness, *volume, *ble_button, *network_text;
@@ -308,7 +308,8 @@ void draw_overlay_face(lv_event_t* event)
     lv_draw_image_dsc_init(&image);
     image.src = unlock_lock_pixels;
     image.opa = backdrop_dimmed ? LV_OPA_COVER - backdrop_opacity : LV_OPA_COVER;
-    const lv_area_t bounds{0, 0, unlock_lock_pixels->header.w - 1, unlock_lock_pixels->header.h - 1};
+    lv_area_t bounds;
+    lv_obj_get_coords(overlay, &bounds);
     lv_draw_image(lv_event_get_layer(event), &image, &bounds);
 }
 
@@ -448,14 +449,22 @@ void refresh_snapshot(lv_obj_t* root, lv_draw_buf_t*& pixels)
 {
     const auto start = perf::now();
     const bool hidden = lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN);
-    if (hidden) lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
+    auto* display = lv_obj_get_display(root);
+    if (hidden) {
+        lv_obj_update_layout(root);
+        lv_display_enable_invalidation(display, false);
+        lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
+    }
     if (pixels) {
         lv_image_cache_drop(pixels);
         if (lv_snapshot_take_to_draw_buf(root, LV_COLOR_FORMAT_RGB565_SWAPPED, pixels) != LV_RESULT_OK)
             destroy_snapshot(pixels);
     }
     if (!pixels) pixels = lv_snapshot_take(root, LV_COLOR_FORMAT_RGB565_SWAPPED);
-    if (hidden) lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
+    if (hidden) {
+        lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
+        lv_display_enable_invalidation(display, true);
+    }
     perf::sample(perf::snapshot_time, perf::now() - start);
 }
 
@@ -478,7 +487,7 @@ void draw_unlock_wipe(lv_event_t* event)
         image.src = pixels;
         lv_draw_image(layer, &image, &bounds);
     };
-    draw_slice(unlock_lock_pixels, 0, 0, edge - 1);
+    draw_slice(unlock_lock_pixels, lv_obj_get_x(lockscreen), 0, edge - 1);
     draw_slice(unlock_drawer_pixels, lv_obj_get_x(drawer), edge, wipe_height - 1);
     layer->_clip_area = original;
 
@@ -490,28 +499,32 @@ void draw_unlock_wipe(lv_event_t* event)
     lv_draw_rect(layer, &line, &boundary);
 }
 
-// The final DIRECT/FULL flush contains the whole composed frame. Capture only a
-// bare watch face so notifications, controls and transition images stay separate.
+// Copy each composited dirty area of the bare watch face into its snapshot.
 void capture_visible_face(lv_event_t* event)
 {
     if (!lock_snapshot_dirty || !unlock_lock_pixels || !locked || settling || was_pressed ||
         !lockscreen || rendered_progress != 0 || page != Page::None || overlay_level || overlay_closing)
         return;
     auto* display = static_cast<lv_display_t*>(lv_event_get_target(event));
-    if (!lv_display_flush_is_last(display) || lv_obj_get_child(lv_screen_active(), -1) != lockscreen ||
+    if (lv_display_get_render_mode(display) == LV_DISPLAY_RENDER_MODE_PARTIAL ||
+        lv_obj_get_child(lv_screen_active(), -1) != lockscreen ||
         !lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN) || !lv_obj_has_flag(settings, LV_OBJ_FLAG_HIDDEN))
         return;
     const auto* frame = lv_display_get_buf_active(display);
     const auto& target = unlock_lock_pixels->header;
     if (frame->header.cf != LV_COLOR_FORMAT_RGB565_SWAPPED || target.cf != LV_COLOR_FORMAT_RGB565_SWAPPED ||
-        target.w > frame->header.w || target.h > frame->header.h) return;
+        target.w != ui::screen_diameter || target.h != ui::screen_diameter) return;
+    lv_area_t coords, dirty;
+    lv_obj_get_coords(lockscreen, &coords);
+    auto flushed = *static_cast<const lv_area_t*>(lv_event_get_param(event));
+    lv_area_move(&flushed, -lv_display_get_offset_x(display), -lv_display_get_offset_y(display));
+    if (lv_display_flush_is_last(display)) lock_snapshot_dirty = false;
+    if (!lv_area_intersect(&dirty, &flushed, &coords)) return;
     const auto start = perf::now();
     lv_image_cache_drop(unlock_lock_pixels);
-    for (unsigned y = 0; y < target.h; ++y) {
-        std::memcpy(unlock_lock_pixels->data + y * target.stride,
-                    frame->data + y * frame->header.stride, target.w * 2);
-    }
-    lock_snapshot_dirty = false;
+    for (int y = dirty.y1; y <= dirty.y2; ++y)
+        std::memcpy(unlock_lock_pixels->data + (y - coords.y1) * target.stride + (dirty.x1 - coords.x1) * 2,
+                    frame->data + y * frame->header.stride + dirty.x1 * 2, lv_area_get_width(&dirty) * 2);
     perf::sample(perf::snapshot_time, perf::now() - start);
 }
 
@@ -684,7 +697,7 @@ void position_dial_line(lv_obj_t* line, std::array<lv_point_precise_t, 2>& point
 
 void create_dial()
 {
-    dial = panel(lockscreen, 0, 0, 466, 466);
+    dial = panel(lock_content, 0, 0, 466, 466);
     // Only the 4 cardinal hours are drawn, to keep the static luminous area small on AMOLED.
     for (int hour : {12, 3, 6, 9}) {
         const double angle = hour * 3.141592653589793 / 6;
@@ -795,8 +808,8 @@ void tick(lv_timer_t*)
         lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(shift_tick) >= 300000) {
         shift_tick = lv_tick_get();
         lock_snapshot_dirty = true;
-        lv_obj_set_style_translate_x(lockscreen, static_cast<int>(lv_rand(0, 8)) - 4, 0);
-        lv_obj_set_style_translate_y(lockscreen, static_cast<int>(lv_rand(0, 8)) - 4, 0);
+        lv_obj_set_style_translate_x(lock_content, static_cast<int>(lv_rand(0, 8)) - 4, 0);
+        lv_obj_set_style_translate_y(lock_content, static_cast<int>(lv_rand(0, 8)) - 4, 0);
     }
     if (overlay_level == 1 && !was_pressed && lv_tick_elaps(clock_shown_at) >= 1500) show_overlay(0);
     if (pending_brightness && runtime().post({CommandType::Brightness, desired_brightness, save_brightness})) {
@@ -929,22 +942,16 @@ void render_page(Page target)
     last_second = UINT32_MAX;
     if (target == Page::Settings) {
         ui::heading(settings, "设置", [](lv_event_t*) { shell_close_settings(); });
-        auto* rows = ui::scroll_panel(settings, 69, ui::content_top, 328, 264);
-        lv_obj_set_scrollbar_mode(rows, LV_SCROLLBAR_MODE_OFF);
+        auto* rows = ui::menu_list(settings);
         const char* names[] = {"Wi-Fi", "Bluetooth", "屏幕", "声音", "系统信息", "表盘样式", "手机配置", "自动返回 / 关机"};
         const lv_image_dsc_t* symbols[] = {&toolbox_icon_wifi_28, &toolbox_icon_ble_28, &toolbox_icon_sun_28, &toolbox_icon_sound_28, &toolbox_icon_box_28, &toolbox_icon_clock_28, &toolbox_icon_phone_28, &toolbox_icon_power_28};
         const Page pages[] = {Page::Wifi, Page::Ble, Page::Display, Page::Sound, Page::Info, Page::Faces, Page::Phone, Page::Power};
         for (int index = 0; index < 8; ++index) {
-            auto* row = button(rows, "", 0, index * 70, 328, 62, [](lv_event_t* event) {
+            auto* row = ui::menu_row(rows, names[index], 0, index * ui::menu_pitch, nullptr, symbols[index], true).object;
+            lv_obj_add_event_cb(row, [](lv_event_t* event) {
                 render_page(static_cast<Page>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(static_cast<lv_obj_t*>(lv_event_get_target(event))))));
-            }, 0x181d25);
+            }, LV_EVENT_CLICKED, nullptr);
             lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<uintptr_t>(pages[index])));
-            auto* content = ui::row(row, 19, 0, 290, 62, 14);
-            icon(content, symbols[index], 0, 0);
-            auto* caption = ui::row_text(content, names[index], &toolbox_misans_23);
-            lv_obj_set_flex_grow(caption, 1);
-            lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_LEFT, 0);
-            icon(content, &toolbox_icon_right_28, 0, 0, accent);
         }
         ui::cache_scroll_rows(rows);
         return;
@@ -1087,9 +1094,9 @@ void shell_init()
     if (home_seconds != 0 && home_seconds != 30 && home_seconds != 60 && home_seconds != 90) home_seconds = 60;
     if (power_seconds != 300 && power_seconds != 600 && power_seconds != 1200 && power_seconds != 1800) power_seconds = 600;
     shell_note_activity();
-    settings = panel(lv_layer_top(), 1, 0, 466, 466);
+    settings = ui::round_page(lv_layer_top());
     lv_obj_add_flag(settings, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN));
-    overlay = panel(lv_layer_top(), 1, 0, 466, 466);
+    overlay = ui::round_page(lv_layer_top());
     lv_obj_set_style_bg_opa(overlay, LV_OPA_TRANSP, 0);
     lv_obj_add_event_cb(overlay, draw_overlay_face, LV_EVENT_DRAW_MAIN, nullptr);
     lv_obj_add_flag(overlay, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN));
@@ -1184,15 +1191,16 @@ void shell_attach(lv_obj_t* root)
     rendered_progress = -1;
     hand_steps.fill(-1);
     dial_battery_percent = -1;
-    lockscreen = panel(lv_screen_active(), 0, 0, 466, 466, 0);
-    digital = text(lockscreen, "", 0, 150, 466, &toolbox_misans_98);
+    lockscreen = ui::round_page(lv_screen_active());
+    lock_content = ui::round_page(lockscreen);
+    digital = text(lock_content, "", 0, 150, 466, &toolbox_misans_98);
     lv_obj_set_style_text_letter_space(digital, -5, 0);
-    date_label = text(lockscreen, "", 33, 280, 400, &toolbox_misans_25, 0xaeb9c9);
-    lock_status_row = ui::row(lockscreen, 0, 64, 466, 32, 13);
+    date_label = text(lock_content, "", 33, 280, 400, &toolbox_misans_25, 0xaeb9c9);
+    lock_status_row = ui::row(lock_content, 0, 64, 466, 32, 13);
     lock_wifi = icon(lock_status_row, &toolbox_icon_wifi_28, 0, 0, 0xb9c7db);
     lock_battery = ui::battery(lock_status_row, 0xb9c7db);
     status = ui::row_text(lock_status_row, "82%", &toolbox_misans_23, 0xb9c7db);
-    auto* unlock_button = icon_button(lockscreen, &toolbox_icon_up_28, 201, 348, 64, 56, [](lv_event_t*) { settle_unlock(true); });
+    auto* unlock_button = icon_button(lock_content, &toolbox_icon_up_28, 201, 348, 64, 56, [](lv_event_t*) { settle_unlock(true); });
     lv_obj_set_style_bg_opa(unlock_button, LV_OPA_TRANSP, LV_PART_MAIN);
     create_dial();
     lv_obj_set_style_text_opa(digital, LV_OPA_70, 0);
@@ -1223,7 +1231,7 @@ void shell_detach()
     destroy_snapshot(unlock_lock_pixels);
     destroy_snapshot(unlock_drawer_pixels);
     if (lockscreen) lv_obj_delete(lockscreen);
-    lockscreen = drawer = nullptr;
+    lockscreen = lock_content = drawer = nullptr;
     drawer_snapshot_dirty = false;
     settling = false;
 }

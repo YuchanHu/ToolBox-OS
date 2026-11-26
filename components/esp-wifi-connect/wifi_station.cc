@@ -77,6 +77,13 @@ void WifiStation::Stop() {
     // Now safe to stop scan, disconnect and stop WiFi (no event callbacks will fire)
     esp_wifi_scan_stop();
     esp_wifi_disconnect();
+    if (direct_) {
+        wifi_config_t empty{};
+        esp_wifi_set_config(WIFI_IF_STA, &empty);
+        direct_ = false;
+        ssid_.clear();
+        ip_address_.clear();
+    }
     esp_wifi_stop();
 
     if (station_netif_ != nullptr) {
@@ -112,6 +119,24 @@ void WifiStation::OnDisconnected(std::function<void(int reason)> on_disconnected
 }
 
 void WifiStation::Start() {
+    ESP_ERROR_CHECK(StartInterface(nullptr));
+}
+
+bool WifiStation::StartDirect(const std::string& ssid, const std::string& password) {
+    wifi_config_t config{};
+    if (ssid.empty() || ssid.size() > sizeof(config.sta.ssid) || password.size() < 8 ||
+        password.size() > sizeof(config.sta.password)) return false;
+    memcpy(config.sta.ssid, ssid.data(), ssid.size());
+    memcpy(config.sta.password, password.data(), password.size());
+    config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    ssid_ = ssid;
+    auto err = StartInterface(&config);
+    explicit_bzero(&config, sizeof config);
+    return err == ESP_OK;
+}
+
+esp_err_t WifiStation::StartInterface(wifi_config_t* direct) {
+    direct_ = direct != nullptr;
     // Note: esp_netif_init() and esp_wifi_init() should be called once before calling this method
     // WiFi driver is initialized by WifiManager::Initialize() and kept alive
     
@@ -122,23 +147,15 @@ void WifiStation::Start() {
     // Create the default WiFi station interface
     station_netif_ = esp_netif_create_default_wifi_sta();
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &WifiStation::WifiEventHandler,
-                                                        this,
-                                                        &instance_any_id_));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &WifiStation::IpEventHandler,
-                                                        this,
-                                                        &instance_got_ip_));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    if (max_tx_power_ != 0) {
-        ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(max_tx_power_));
-    }
-
+    esp_err_t err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+        &WifiStation::WifiEventHandler, this, &instance_any_id_);
+    if (err == ESP_OK) err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+        &WifiStation::IpEventHandler, this, &instance_got_ip_);
+    if (err == ESP_OK) err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err == ESP_OK && direct) err = esp_wifi_set_config(WIFI_IF_STA, direct);
+    if (err == ESP_OK) err = esp_wifi_start();
+    if (err == ESP_OK && max_tx_power_ != 0) err = esp_wifi_set_max_tx_power(max_tx_power_);
+    if (err != ESP_OK || direct) return err;
     // Setup the timer to scan WiFi
     esp_timer_create_args_t timer_args = {
         .callback = [](void* arg) {
@@ -149,7 +166,7 @@ void WifiStation::Start() {
         .name = "WiFiScanTimer",
         .skip_unhandled_events = true
     };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer_handle_));
+    return esp_timer_create(&timer_args, &timer_handle_);
 }
 
 bool WifiStation::WaitForConnected(int timeout_ms) {
@@ -308,15 +325,24 @@ void WifiStation::UpdateScanInterval() {
 void WifiStation::WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     auto* this_ = static_cast<WifiStation*>(arg);
     if (event_id == WIFI_EVENT_STA_START) {
+        if (this_->direct_) {
+            if (esp_wifi_connect() != ESP_OK) xEventGroupSetBits(this_->event_group_, WIFI_EVENT_STOPPED);
+            return;
+        }
         esp_wifi_scan_start(nullptr, false);
         if (this_->on_scan_begin_) {
             this_->on_scan_begin_();
         }
     } else if (event_id == WIFI_EVENT_SCAN_DONE) {
+        if (this_->direct_) return;
         xEventGroupSetBits(this_->event_group_, WIFI_EVENT_SCAN_DONE_BIT);
         this_->HandleScanResult();
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(this_->event_group_, WIFI_EVENT_CONNECTED);
+        if (this_->direct_) {
+            xEventGroupSetBits(this_->event_group_, WIFI_EVENT_STOPPED);
+            return;
+        }
         
         // Notify disconnected callback only once when transitioning from connected to disconnected
         bool was_connected = this_->was_connected_;
@@ -357,6 +383,7 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
     ESP_LOGI(TAG, "Got IP: %s", this_->ip_address_.c_str());
     
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
+    if (this_->direct_) return;
     this_->was_connected_ = true;  // Mark as connected for disconnect notification
     if (this_->on_connected_) {
         this_->on_connected_(this_->ssid_);

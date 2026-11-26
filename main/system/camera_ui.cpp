@@ -9,7 +9,7 @@ using ui::set_text;
 
 CameraPage::CameraPage()
 {
-    root_ = ui::panel(lv_screen_active(), 1, 0, 466, 466);
+    root_ = ui::round_page(lv_screen_active());
 
     ring_ = lv_arc_create(root_);
     lv_obj_remove_style_all(ring_);
@@ -33,8 +33,7 @@ CameraPage::CameraPage()
     hint_ = ui::text(root_, "", 68, 333, 330, &toolbox_misans_20, 0x9daebd);
     for (auto* label : {message_, detail_, hint_}) lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
 
-    devices_ = ui::scroll_panel(root_, 82, 220, 302, 126);
-    lv_obj_set_scrollbar_mode(devices_, LV_SCROLLBAR_MODE_OFF);
+    devices_ = ui::menu_list(root_, 220, 126);
     ui::cache_scroll_rows(devices_);
 
     modes_ = ui::panel(root_, 90, 221, 286, 150);
@@ -102,16 +101,9 @@ void CameraPage::rebuild_devices(const camera::Status& status)
     lv_obj_clean(devices_);
     displayed_devices_ = status.devices;
     for (size_t index = 0; index < displayed_devices_.size(); ++index) {
-        auto* button = ui::button(devices_, "", 0, index * 65, 302, 55, [](lv_event_t*) {}, 0x151e27);
+        auto* button = ui::menu_row(devices_, displayed_devices_[index].name.c_str(), 0, index * ui::menu_pitch).object;
         lv_obj_set_user_data(button, reinterpret_cast<void*>(index + 100));
         lv_obj_add_event_cb(button, event, LV_EVENT_CLICKED, this);
-        auto* content = ui::row(button, 18, 0, 266, 55, 10);
-        ui::icon(content, &toolbox_camera_photo_small, 0, 0, 0x91d2db);
-        auto* name = ui::row_text(content, displayed_devices_[index].name.c_str(), &toolbox_misans_20);
-        lv_obj_set_flex_grow(name, 1);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
-        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_LEFT, 0);
-        ui::icon(content, &toolbox_camera_right, 0, 0, 0x98a4b7);
     }
 }
 

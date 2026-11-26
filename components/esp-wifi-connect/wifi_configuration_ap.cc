@@ -128,7 +128,58 @@ std::string WifiConfigurationAp::GetWebServerUrl()
     return "http://192.168.4.1";
 }
 
-void WifiConfigurationAp::StartAccessPoint()
+bool WifiConfigurationAp::StartCustom(const char* html, std::function<bool(std::string_view)> submit)
+{
+    if (!html || !submit) return false;
+    custom_html_ = html;
+    custom_submit_ = std::move(submit);
+    StartAccessPoint(true);
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.recv_wait_timeout = 2;
+    config.send_wait_timeout = 2;
+    if (httpd_start(&server_, &config) != ESP_OK) { Stop(); return false; }
+    httpd_uri_t page{
+        .uri = "/", .method = HTTP_GET,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            httpd_resp_set_type(req, "text/html; charset=utf-8");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            return httpd_resp_sendstr(req, static_cast<WifiConfigurationAp*>(req->user_ctx)->custom_html_);
+        },
+        .user_ctx = this
+    };
+    httpd_uri_t post{
+        .uri = "/", .method = HTTP_POST,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            char type[64]{};
+            const size_t length = req->content_len;
+            if (!length || length > 1536 ||
+                httpd_req_get_hdr_value_str(req, "Content-Type", type, sizeof type) != ESP_OK ||
+                strncmp(type, "application/x-www-form-urlencoded", 33) != 0)
+                return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
+            std::string body(length, '\0');
+            size_t received = 0;
+            const int64_t until = esp_timer_get_time() + 3000000;
+            while (received < length && esp_timer_get_time() < until) {
+                int n = httpd_req_recv(req, body.data() + received, length - received);
+                if (n <= 0) break;
+                received += n;
+            }
+            const bool accepted = received == length &&
+                static_cast<WifiConfigurationAp*>(req->user_ctx)->custom_submit_(body);
+            explicit_bzero(body.data(), body.size());
+            httpd_resp_set_type(req, "text/plain; charset=utf-8");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            if (!accepted) httpd_resp_set_status(req, "400 Bad Request");
+            return httpd_resp_sendstr(req, accepted ? "凭据已提交，请在手表上核对相机指纹。" : "提交失败，请检查输入后重试。");
+        },
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &page) != ESP_OK ||
+        httpd_register_uri_handler(server_, &post) != ESP_OK) { Stop(); return false; }
+    return true;
+}
+
+void WifiConfigurationAp::StartAccessPoint(bool custom)
 {
     // Note: esp_netif_init() and esp_wifi_init() should be called once before calling this method
     // WiFi driver is initialized by WifiManager::Initialize() and kept alive
@@ -156,12 +207,13 @@ void WifiConfigurationAp::StartAccessPoint()
     wifi_config_t wifi_config = {};
     strcpy((char *)wifi_config.ap.ssid, ssid.c_str());
     wifi_config.ap.ssid_len = ssid.length();
-    wifi_config.ap.max_connection = 4;
+    wifi_config.ap.max_connection = custom ? 1 : 4;
     wifi_config.ap.authmode = WIFI_AUTH_OPEN;
 
     // Start the WiFi Access Point
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(custom ? WIFI_MODE_AP : WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    explicit_bzero(&wifi_config, sizeof wifi_config);
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
@@ -172,6 +224,7 @@ void WifiConfigurationAp::StartAccessPoint()
 #endif
 
     ESP_LOGI(TAG, "Access Point started with SSID %s", ssid.c_str());
+    if (custom) return;
 
     // 加载高级配置
     nvs_handle_t nvs;
@@ -911,6 +964,8 @@ void WifiConfigurationAp::Stop() {
         httpd_stop(server_);
         server_ = nullptr;
     }
+    custom_html_ = nullptr;
+    custom_submit_ = {};
 
     // 停止DNS服务器
     if (dns_server_) {

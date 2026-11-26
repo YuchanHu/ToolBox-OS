@@ -121,4 +121,27 @@ bool decode_weather(WeatherResult &next, cJSON *root) {
     next.forecast = std::move(data);
     return true;
 }
+
+bool decode_cached_weather(WeatherResult& result, cJSON* root, const std::string& query)
+{
+    const auto* saved = field(root, "saved");
+    if (!cJSON_IsNumber(saved) || str(root, "query") != query) return false;
+
+    if (const auto* compact = field(root, "hours"); cJSON_IsArray(compact)) {
+        auto* hours = cJSON_AddArrayToObject(root, "hourly_forecast");
+        const cJSON* row;
+        cJSON_ArrayForEach(row, compact) {
+            auto* hour = cJSON_CreateObject();
+            int index = 0;
+            for (auto key : {"time", "temperature", "pop", "precip"}) {
+                const auto* value = cJSON_GetArrayItem(row, index++);
+                if (cJSON_IsString(value)) cJSON_AddStringToObject(hour, key, value->valuestring);
+            }
+            cJSON_AddItemToArray(hours, hour);
+        }
+    }
+    if (!decode_weather(result, root)) return false;
+    result.fetched_at = static_cast<int64_t>(saved->valuedouble);
+    return true;
+}
 } // namespace toolbox

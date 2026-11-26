@@ -67,6 +67,11 @@ public:
     // ==================== Station Mode ====================
     
     void StartStation();   // Non-blocking, auto-stops config AP if active
+    // Acquire an idle radio for one foreground, RAM-only camera session.
+    // Releases the station on failure. The caller calls StopStation on success.
+    bool StartDirectStation(const std::string& ssid, const std::string& password);
+    bool WaitForStation(int timeoutMs);
+    std::vector<wifi_ap_record_t> ScanNearby();
     void StopStation();    // Non-blocking
     
     bool IsConnected() const;
@@ -79,6 +84,8 @@ public:
     // ==================== Config AP Mode ====================
     
     void StartConfigAp();  // Non-blocking, auto-stops station if active
+    bool StartCustomConfigAp(const std::string& prefix, const char* html,
+                             std::function<bool(std::string_view)> submit);
     void StopConfigAp();   // Non-blocking
     
     bool IsConfigMode() const;
@@ -109,9 +116,11 @@ private:
     std::unique_ptr<WifiConfigurationAp> config_ap_;
 
     mutable std::mutex mutex_;
+    std::recursive_mutex radio_mutex_;
     bool initialized_ = false;
     bool station_active_ = false;
     bool config_mode_active_ = false;
+    bool custom_config_active_ = false;
 
     std::function<void(WifiEvent, const std::string&)> event_callback_;
     mutable std::string mac_address_;

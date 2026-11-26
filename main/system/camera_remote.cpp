@@ -232,7 +232,6 @@ esp_err_t stack_started()
     if (result == ESP_OK) result = esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &size, sizeof(size));
     if (result == ESP_OK) result = esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &keys, sizeof(keys));
     if (result == ESP_OK) result = esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &keys, sizeof(keys));
-    if (result == ESP_OK) result = esp_ble_gattc_register_callback(gatt_event);
     if (result == ESP_OK) result = esp_ble_gattc_app_register(app_id);
     return result;
 }
@@ -338,6 +337,7 @@ void gatt_event(esp_gattc_cb_event_t event, esp_gatt_if_t interface, esp_ble_gat
         return;
     }
     if (event == ESP_GATTC_CONNECT_EVT) {
+        if (!opening && !active) return;
         if (!active || !selected_valid || closing || current.phase == Phase::Error || std::memcmp(data->connect.remote_bda, selected.address.data(), 6) != 0) {
             connection = data->connect.conn_id;
             opening = false;

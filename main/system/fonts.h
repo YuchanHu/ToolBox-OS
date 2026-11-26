@@ -17,6 +17,8 @@ LV_FONT_DECLARE(toolbox_misans_26);
 LV_FONT_DECLARE(toolbox_misans_65);
 LV_FONT_DECLARE(toolbox_misans_98);
 LV_FONT_DECLARE(toolbox_misans_36);
+LV_FONT_DECLARE(toolbox_misans_lighting_20);
+LV_FONT_DECLARE(toolbox_misans_lighting_26);
 #ifdef __cplusplus
 }
 #endif

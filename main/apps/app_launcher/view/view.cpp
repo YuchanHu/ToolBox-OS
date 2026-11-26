@@ -52,7 +52,7 @@ void view::LauncherView::init(std::vector<mooncake::AppProps_t> apps)
         });
     }
     keys_ = std::make_unique<input::KeyManager>();
-    panel_ = ui::panel(lv_screen_active(), 1, 0, 466, 466);
+    panel_ = ui::round_page(lv_screen_active());
     ui::heading(panel_, "应用", [](lv_event_t*) { shell_lock(); });
     scroll_ = ui::panel(panel_, 0, 140, 466, 186);
     lv_obj_add_flag(scroll_, static_cast<lv_obj_flag_t>(

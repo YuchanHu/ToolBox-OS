@@ -35,6 +35,7 @@ static constexpr gpio_num_t cfg_pin_io2  = GPIO_NUM_46;
 static constexpr gpio_num_t cfg_pin_io3  = GPIO_NUM_45;
 static constexpr gpio_num_t cfg_pin_cs   = GPIO_NUM_39;
 static constexpr gpio_num_t cfg_pin_te   = GPIO_NUM_38;
+static constexpr gpio_num_t cfg_pin_touch = GPIO_NUM_13;
 static constexpr gpio_num_t cfg_pin_rst  = GPIO_NUM_NC;
 static SemaphoreHandle_t panel_mutex;
 // Keep the internal staging buffers small enough for Wi-Fi and BLE coexistence.
@@ -192,10 +193,7 @@ void Hal::display_init()
     ESP_ERROR_CHECK(panel_mutex ? ESP_OK : ESP_ERR_NO_MEM);
 
     _display = std::make_unique<M5StopWatch>();
-    if (!_display->init()) {
-        mclog::tagError(_tag, "display init failed");
-        _display.reset();
-    }
+    ESP_ERROR_CHECK(_display->init() ? ESP_OK : ESP_FAIL);
 
     // Load brightness from settings
     auto brightness = getBackLightBrightness(true);
@@ -209,24 +207,18 @@ LGFX_Device &Hal::getDisplay()
 
 void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
 {
-    _bl_brightness = uitk::clamp(brightness, 0, 100);
+    brightness = uitk::clamp(brightness, 0, 100);
+    const int previous = _bl_brightness.exchange(brightness, std::memory_order_relaxed);
+    const int set_target = uitk::map_range(brightness, 0, 100, 0, 255);
 
-    int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
-
-    // Never illuminate the redundant power LED while the AMOLED is on. Turn
-    // it back on only when brightness is explicitly set to zero.
-    if (_bl_brightness > 0) {
-        setPowerLed(false);
-    }
+    if (previous == 0 && brightness > 0) setPowerLed(false);
     _display->setBrightness(set_target);
-    if (_bl_brightness == 0) {
-        setPowerLed(true);
-    }
+    if (previous > 0 && brightness == 0) setPowerLed(true);
 
     if (saveToSettings) {
         Settings settings(std::string(Hal::SettingsNs), true);
-        settings.SetInt("bl_lev", _bl_brightness);
-        mclog::tagInfo(_tag, "brightness saved to settings: {}", _bl_brightness);
+        settings.SetInt("bl_lev", brightness);
+        mclog::tagInfo(_tag, "brightness saved to settings: {}", brightness);
     }
 }
 
@@ -234,11 +226,9 @@ int Hal::getBackLightBrightness(bool loadFromSettings)
 {
     if (loadFromSettings) {
         Settings settings(std::string(Hal::SettingsNs), false);
-        _bl_brightness = settings.GetInt("bl_lev", 80);
-        _bl_brightness = uitk::clamp(_bl_brightness, 10, 100);
-        mclog::tagInfo(_tag, "brightness loaded from settings: {}", _bl_brightness);
+        return uitk::clamp(settings.GetInt("bl_lev", 80), 10, 100);
     }
-    return _bl_brightness;
+    return _bl_brightness.load(std::memory_order_relaxed);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -249,32 +239,58 @@ int Hal::getBackLightBrightness(bool loadFromSettings)
 static std::unique_ptr<Cst820> _cst820;
 static toolbox::TouchHistory touch_history;
 static portMUX_TYPE touch_mux = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t lvgl_task;
+static TaskHandle_t touch_task;
+static bool touch_irq_available;
+static constexpr uint32_t touch_track_ms = 4;
+static constexpr uint32_t touch_idle_ms = 32;
+
+static void IRAM_ATTR touch_interrupt(void*)
+{
+    if (!touch_task) return;
+    BaseType_t wake = pdFALSE;
+    vTaskNotifyGiveFromISR(touch_task, &wake);
+    if (wake) portYIELD_FROM_ISR();
+}
+
+static bool touch_has_samples()
+{
+    portENTER_CRITICAL(&touch_mux);
+    const bool pending = !touch_history.empty();
+    portEXIT_CRITICAL(&touch_mux);
+    return pending;
+}
 
 static void touch_rtos_task(void*)
 {
     TickType_t wake = xTaskGetTickCount();
     uint32_t last_good = GetHAL().millis();
-    bool failed_gesture = false;
+    uint32_t previous = 0;
+    bool tracking = false;
     bool paused = false;
     while (true) {
-        static uint32_t previous = 0;
         if (toolbox::touch_input_blocked()) {
             if (!paused) {
+                if (touch_irq_available) gpio_intr_disable(cfg_pin_touch);
                 const auto now = GetHAL().millis();
                 portENTER_CRITICAL(&touch_mux);
                 touch_history.cancel(now);
                 portEXIT_CRITICAL(&touch_mux);
+                xTaskNotifyGive(lvgl_task);
+                tracking = false;
                 paused = true;
             }
             vTaskDelay(pdMS_TO_TICKS(25));
             continue;
         }
         if (paused) {
+            if (touch_irq_available) gpio_intr_enable(cfg_pin_touch);
             wake = xTaskGetTickCount();
             last_good = GetHAL().millis();
             previous = 0;
             paused = false;
         }
+        ulTaskNotifyTake(pdTRUE, 0);
         const auto start = perf::now();
         const bool valid = _cst820->read();
         const auto sampled = perf::now();
@@ -285,8 +301,8 @@ static void touch_rtos_task(void*)
         if (!valid) perf::sample(perf::touch_read_error, 1);
         if (valid) {
             last_good = now;
-            failed_gesture = false;
             const bool pressed = _cst820->isPressed();
+            tracking = pressed;
             int16_t x = _cst820->getX(), y = _cst820->getY();
             portENTER_CRITICAL(&touch_mux);
             const auto overflows = touch_history.overflows();
@@ -302,18 +318,25 @@ static void touch_rtos_task(void*)
             const auto depth = touch_history.size();
             const auto overflow = touch_history.overflows() - overflows;
             portEXIT_CRITICAL(&touch_mux);
-            if (depth) perf::sample(perf::touch_queue_depth, depth);
+            if (depth) {
+                perf::sample(perf::touch_queue_depth, depth);
+                xTaskNotifyGive(lvgl_task);
+            }
             if (overflow) perf::sample(perf::touch_overflow, overflow);
-        } else if (!failed_gesture && now - last_good >= 80) {
+        } else if (tracking && now - last_good >= 80) {
             portENTER_CRITICAL(&touch_mux);
             touch_history.cancel(now);
             portEXIT_CRITICAL(&touch_mux);
-            failed_gesture = true;
+            xTaskNotifyGive(lvgl_task);
+            tracking = false;
         }
-        if (xTaskDelayUntil(&wake, pdMS_TO_TICKS(4)) == pdFALSE) {
+        if (!tracking && touch_irq_available) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(touch_idle_ms));
+            wake = xTaskGetTickCount();
+        } else if (xTaskDelayUntil(&wake, pdMS_TO_TICKS(touch_track_ms)) == pdFALSE) {
             // After a failed or slow bus transaction, resume at the normal cadence.
             wake = xTaskGetTickCount();
-            xTaskDelayUntil(&wake, pdMS_TO_TICKS(4));
+            xTaskDelayUntil(&wake, pdMS_TO_TICKS(touch_track_ms));
         }
     }
 }
@@ -331,10 +354,24 @@ void Hal::touchpad_init()
         _cst820.reset();
         return;
     }
+    const gpio_config_t pin = {
+        .pin_bit_mask = 1ULL << cfg_pin_touch,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
+    };
+    // CST820 interrupt polarity is configurable. Sample either edge and keep
+    // a slow poll in reserve for a report arriving before IRQ registration.
+    touch_irq_available = gpio_config(&pin) == ESP_OK &&
+                          gpio_isr_handler_add(cfg_pin_touch, touch_interrupt, nullptr) == ESP_OK;
     const BaseType_t created = xTaskCreatePinnedToCore(touch_rtos_task, "touch_sample", 4096,
-                                                      nullptr, 7, nullptr, 1);
+                                                      nullptr, 7, &touch_task, 1);
     ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_LOGI("Touch", "independent 4ms sampling, timestamped 64-event history");
+    if (touch_irq_available)
+        ESP_LOGI("Touch", "GPIO13 IRQ, %lu ms idle fallback, %lu ms active sampling", touch_idle_ms, touch_track_ms);
+    else
+        ESP_LOGW("Touch", "GPIO13 IRQ unavailable, using 4ms polling");
 }
 
 Hal::TouchPoint Hal::getTouchPoint()
@@ -353,7 +390,6 @@ static SemaphoreHandle_t xGuiSemaphore;
 static SemaphoreHandle_t frame_done;
 static SemaphoreHandle_t te_ready;
 static QueueHandle_t frame_queue;
-static TaskHandle_t lvgl_task;
 static std::atomic<bool> _lvgl_update_enabled = false;
 static std::atomic<bool> frame_transferring = false;
 static bool frame_pending = false; // Accessed only while holding xGuiSemaphore.
@@ -402,28 +438,29 @@ static bool wait_for_te()
     constexpr uint32_t phase_limit_us = 500; // V5 window, kept for panel comparison.
     static uint32_t used_edge = 0;
     const auto start = perf::now();
-    xSemaphoreTake(te_ready, 0);
-    uint32_t edge = te_edge_us.load(std::memory_order_relaxed);
-    uint32_t phase = static_cast<uint32_t>(esp_timer_get_time()) - edge;
-    if (edge == used_edge || phase > phase_limit_us) {
-        if (xSemaphoreTake(te_ready, pdMS_TO_TICKS(25)) != pdTRUE) {
+    TimeOut_t timeout;
+    vTaskSetTimeOutState(&timeout);
+    TickType_t remaining = pdMS_TO_TICKS(25);
+    bool waited = false;
+    while (true) {
+        const uint32_t edge = te_edge_us.load(std::memory_order_relaxed);
+        const uint32_t phase = static_cast<uint32_t>(esp_timer_get_time()) - edge;
+        if (edge && edge != used_edge) {
+            used_edge = edge;
+            if (phase <= phase_limit_us) {
+                perf::sample(perf::te_phase, phase);
+                perf::sample(perf::te_wait_time, perf::now() - start);
+                return true;
+            }
+            if (waited) perf::sample(perf::te_missed, 1);
+        }
+        if (xTaskCheckForTimeOut(&timeout, &remaining) || xSemaphoreTake(te_ready, remaining) != pdTRUE) {
             perf::sample(perf::te_timeout, 1);
             perf::sample(perf::te_wait_time, perf::now() - start);
             return false;
         }
-        edge = te_edge_us.load(std::memory_order_relaxed);
-        phase = static_cast<uint32_t>(esp_timer_get_time()) - edge;
-        if (edge == used_edge || phase > phase_limit_us) {
-            used_edge = edge;
-            perf::sample(perf::te_missed, 1);
-            perf::sample(perf::te_wait_time, perf::now() - start);
-            return false;
-        }
+        waited = true;
     }
-    used_edge = edge;
-    perf::sample(perf::te_phase, phase);
-    perf::sample(perf::te_wait_time, perf::now() - start);
-    return true;
 }
 
 static uint32_t stage_first_strip(const DisplayFrame& frame, const lv_area_t& area)
@@ -440,8 +477,16 @@ static void display_rtos_task(void*)
     bool previous_active = false;
     DisplayFrame frame;
     const char* last_boot_marker = nullptr;
+    bool te_enabled = false;
     while (true) {
-        if (xQueueReceive(frame_queue, &frame, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        // Keep phase information between nearby frames. Stop taking panel
+        // interrupts once the screen settles, until there is another frame.
+        const TickType_t wait = te_enabled ? pdMS_TO_TICKS(50) : portMAX_DELAY;
+        if (xQueueReceive(frame_queue, &frame, wait) == pdTRUE) {
+            if (!te_enabled) {
+                gpio_intr_enable(cfg_pin_te);
+                te_enabled = true;
+            }
             // Prepare the first strip before waiting for the panel's blanking edge.
             uint32_t packing_us = stage_first_strip(frame, frame.regions.areas[0]);
             xSemaphoreTake(panel_mutex, portMAX_DELAY);
@@ -492,6 +537,11 @@ static void display_rtos_task(void*)
             xSemaphoreGive(panel_mutex);
             xSemaphoreGive(frame_done);
             xTaskNotifyGive(lvgl_task);
+        } else if (te_enabled) {
+            gpio_intr_disable(cfg_pin_te);
+            te_edge_us.store(0, std::memory_order_relaxed);
+            xSemaphoreTake(te_ready, 0);
+            te_enabled = false;
         }
     }
 }
@@ -542,6 +592,7 @@ static void refresh_if_ready(lv_timer_t* timer)
     // worker owns it. All rendering goes to the other buffer.
     if (!can_render()) {
         refresh_deferred = true;
+        lv_timer_pause(timer);
         return;
     }
     refresh_deferred = false;
@@ -573,15 +624,13 @@ static void unlock_gui()
 }
 
 constexpr uint32_t display_refresh_ms = 12;
-constexpr uint32_t input_read_ms = 4;
 constexpr uint32_t recording_refresh_ms = 40;
-constexpr uint32_t blocked_input_read_ms = 40;
 
 static void lvgl_rtos_task(void*)
 {
     bool recording_mode = false;
     while (true) {
-        uint32_t next = 8;
+        uint32_t next = LV_NO_TIMER_READY;
         if (_lvgl_update_enabled && lock_gui()) {
             if (_lvgl_update_enabled) {
                 auto* display = lv_display_get_default();
@@ -590,9 +639,11 @@ static void lvgl_rtos_task(void*)
                     recording_mode = touch_blocked;
                     lv_timer_set_period(lv_display_get_refr_timer(display),
                                         recording_mode ? recording_refresh_ms : display_refresh_ms);
-                    if (auto* input = GetHAL().lvTouchpad)
-                        lv_timer_set_period(lv_indev_get_read_timer(input),
-                                            recording_mode ? blocked_input_read_ms : input_read_ms);
+                }
+                if (touch_has_samples()) {
+                    auto* timer = lv_indev_get_read_timer(GetHAL().lvTouchpad);
+                    lv_timer_resume(timer);
+                    lv_timer_ready(timer);
                 }
                 // Wake a paused refresh timer when a static frame needs repair.
                 if (can_render() && (refresh_deferred || (!frame_pending && repair_regions.count))) {
@@ -604,7 +655,8 @@ static void lvgl_rtos_task(void*)
             }
             unlock_gui();
         }
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(std::clamp<uint32_t>(next, 1, recording_mode ? 20 : 8)));
+        const TickType_t wait = next == LV_NO_TIMER_READY ? portMAX_DELAY : pdMS_TO_TICKS(std::max<uint32_t>(1, next));
+        ulTaskNotifyTake(pdTRUE, wait);
     }
 }
 
@@ -730,14 +782,15 @@ void Hal::lvgl_init()
     lv_indev_set_display(lvTouchpad, disp);
 
     auto* input_timer = lv_indev_get_read_timer(lvTouchpad);
-    lv_timer_set_period(input_timer, input_read_ms);
-#ifdef CONFIG_TOOLBOX_PERF
+    lv_timer_set_period(input_timer, touch_track_ms);
+    lv_timer_pause(input_timer);
     lv_timer_set_cb(input_timer, [](lv_timer_t* timer) {
         const auto start = perf::now();
-        lv_indev_read(static_cast<lv_indev_t*>(lv_timer_get_user_data(timer)));
+        auto* input = static_cast<lv_indev_t*>(lv_timer_get_user_data(timer));
+        lv_indev_read(input);
+        if (lv_indev_get_state(input) == LV_INDEV_STATE_RELEASED) lv_timer_pause(timer);
         perf::sample(perf::event_process_time, perf::now() - start);
     });
-#endif
     lv_indev_set_scroll_limit(lvTouchpad, 6);
 
     xGuiSemaphore = xSemaphoreCreateMutex();
@@ -750,12 +803,15 @@ void Hal::lvgl_init()
     ESP_ERROR_CHECK(isr_result == ESP_ERR_INVALID_STATE ? ESP_OK : isr_result);
     ESP_ERROR_CHECK(gpio_set_intr_type(cfg_pin_te, GPIO_INTR_POSEDGE));
     ESP_ERROR_CHECK(gpio_isr_handler_add(cfg_pin_te, te_interrupt, nullptr));
-    ESP_ERROR_CHECK(gpio_intr_enable(cfg_pin_te));
+    ESP_ERROR_CHECK(gpio_intr_disable(cfg_pin_te));
     const BaseType_t display_task = xTaskCreatePinnedToCore(display_rtos_task, "display_dma", 4096,
                                                            nullptr, 6, nullptr, 0);
     const BaseType_t gui_task = xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl", 16 * 1024,
                                                        nullptr, 4, &lvgl_task, 1);
     ESP_ERROR_CHECK(display_task == pdPASS && gui_task == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    lv_timer_handler_set_resume_cb([](void*) {
+        if (xTaskGetCurrentTaskHandle() != lvgl_task) xTaskNotifyGive(lvgl_task);
+    }, nullptr);
     ESP_LOGI("Display", "Refresh V6: RGB565_SWAPPED DIRECT, TE GPIO38, 80MHz QSPI, DMA %d rows, touch 4ms", dma_rows);
 
     {
@@ -792,6 +848,7 @@ void Hal::lvglUnlock()
 void Hal::startLvglUpdate()
 {
     _lvgl_update_enabled = true;
+    xTaskNotifyGive(lvgl_task);
 }
 
 void Hal::stopLvglUpdate()

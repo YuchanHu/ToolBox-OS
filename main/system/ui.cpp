@@ -92,6 +92,7 @@ constexpr size_t max_row_bytes = 512 * 1024;
 struct ScrollRows {
     lv_obj_t* viewport;
     lv_timer_t* timer = nullptr;
+    bool hidden = false;
     std::array<CachedRow, cached_rows> rows{};
     int scroll_y = 0;
     lv_area_t background_clip{};
@@ -269,7 +270,11 @@ void invalidate_scrolling_text(lv_event_t* event)
 void prepare_scroll_row(lv_timer_t* timer)
 {
     auto& cache = *static_cast<ScrollRows*>(lv_timer_get_user_data(timer));
-    if (!lv_obj_is_visible(cache.viewport)) return;
+    if (!lv_obj_is_visible(cache.viewport)) {
+        cache.hidden = true;
+        lv_timer_pause(timer);
+        return;
+    }
     lv_obj_update_layout(cache.viewport);
     lv_area_t viewport;
     lv_obj_get_coords(cache.viewport, &viewport);
@@ -337,12 +342,55 @@ lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, uint32_t 
     return object;
 }
 
+lv_obj_t* round_page(lv_obj_t* parent)
+{
+    auto* page = panel(parent, 0, 0, screen_diameter, screen_diameter);
+    lv_obj_center(page); // The CO5300 transfer width includes two columns outside the visible circle.
+    return page;
+}
+
 lv_obj_t* scroll_panel(lv_obj_t* parent, int x, int y, int width, int height, uint32_t color, int radius)
 {
     auto* list = panel(parent, x, y, width, height, color, radius);
     lv_obj_add_flag(list, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     return list;
+}
+
+lv_obj_t* menu_list(lv_obj_t* parent, int y, int height)
+{
+    auto* list = scroll_panel(parent, menu_x, y, menu_width, height);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    return list;
+}
+
+MenuRow menu_row(lv_obj_t* parent, const char* caption, int x, int y, const char* value,
+                 const lv_image_dsc_t* leading, bool chevron)
+{
+    constexpr int inset = 19, gap = 14;
+    auto* object = panel(parent, x, y, menu_width, menu_height, menu_color, menu_radius);
+    lv_obj_add_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(object, lv_color_hex(0x344861), LV_STATE_PRESSED);
+    lv_obj_set_style_opa(object, LV_OPA_40, LV_STATE_DISABLED);
+
+    const int left = inset + (leading ? leading->header.w + gap : 0);
+    const int right = inset + (chevron ? toolbox_icon_right_28.header.w + gap : 0);
+    const int value_width = value ? (chevron ? 110 : 138) : 0;
+    auto make_label = [&](const char* content, int width, lv_align_t align, int offset, uint32_t color) {
+        auto* label = text(object, content, 0, 0, width, &toolbox_misans_23, color);
+        lv_obj_set_height(label, toolbox_misans_23.line_height);
+        lv_obj_set_style_text_align(label, align == LV_ALIGN_LEFT_MID ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT, 0);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_align(label, align, offset, 0);
+        center_cap_height(label, &toolbox_misans_23);
+        return label;
+    };
+    make_label(caption, menu_width - left - right - (value ? value_width + 10 : 0),
+               LV_ALIGN_LEFT_MID, left, 0xf3f6fc);
+    if (leading) icon(object, leading, inset, (menu_height - leading->header.h) / 2);
+    if (chevron) icon(object, &toolbox_icon_right_28, menu_width - inset - toolbox_icon_right_28.header.w,
+                      (menu_height - toolbox_icon_right_28.header.h) / 2, accent);
+    return {object, value ? make_label(value, value_width, LV_ALIGN_RIGHT_MID, -right, accent) : nullptr};
 }
 
 // Rasterize immutable rows on a black viewport, or mask plain text labels.
@@ -362,6 +410,13 @@ void cache_scroll_rows(lv_obj_t* viewport)
     };
     lv_obj_add_event_cb(viewport, resume, LV_EVENT_SCROLL, cache);
     lv_obj_add_event_cb(viewport, resume, LV_EVENT_CHILD_CHANGED, cache);
+    lv_obj_add_event_cb(viewport, [](lv_event_t* event) {
+        auto& cache = *static_cast<ScrollRows*>(lv_event_get_user_data(event));
+        if (cache.hidden) {
+            cache.hidden = false;
+            lv_timer_resume(cache.timer);
+        }
+    }, LV_EVENT_DRAW_MAIN, cache);
     if (lv_obj_get_style_radius(viewport, LV_PART_MAIN) > 0) {
         lv_obj_add_event_cb(viewport, cover_rounded_list, LV_EVENT_COVER_CHECK, nullptr);
         lv_obj_add_event_cb(viewport, draw_list_corners, LV_EVENT_DRAW_MAIN_BEGIN, nullptr);
@@ -442,8 +497,7 @@ void heading(lv_obj_t* parent, const char* value, lv_event_cb_t back)
 
 lv_obj_t* boot(lv_obj_t* parent)
 {
-    auto* root = panel(parent, 0, 0, 466, 466);
-    lv_obj_center(root); // Center the visible 466 columns in the 468-column driver.
+    auto* root = round_page(parent);
     constexpr uint32_t ink = 0xf3f7fc;
     icon(root, &toolbox_boot_logo, 146, 104, ink);
     const auto& font = toolbox_misans_32;

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <hal/hal.h>
 #include <random>
+#include <utility>
 
 namespace audio {
 
@@ -58,7 +59,7 @@ void play_tone(int frequency, float durationSec, float volumeScale)
         }
     }
 
-    GetHAL().audioPlay(buffer);
+    GetHAL().audioPlay(std::move(buffer));
 }
 
 void play_melody(const std::vector<int>& midiList, float durationSec, float volumeScale)
@@ -109,7 +110,7 @@ void play_melody(const std::vector<int>& midiList, float durationSec, float volu
         }
     }
 
-    GetHAL().audioPlay(buffer);
+    GetHAL().audioPlay(std::move(buffer));
 }
 
 void play_tone_from_midi(int midi, float durationSec, float volumeScale)
@@ -141,8 +142,7 @@ void play_random_tone(int semitoneShift, float durationSec, float volumeScale)
 
 void stop()
 {
-    std::vector<int16_t> silence;
-    GetHAL().audioPlay(silence, true);
+    GetHAL().audioPlay({});
 }
 
 }  // namespace audio

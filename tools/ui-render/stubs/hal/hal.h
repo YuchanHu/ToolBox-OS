@@ -41,10 +41,12 @@ struct Hal {
     m5::Button_Class btnA, btnB;
     bool rawA = false, rawB = false;
     bool applicationButtonFeedback = false;
-    int vibration_count=0;
+    int vibration_count=0, tone_count=0;
+    bool camera_muted = false;
+    void setCameraRecordingMute(bool muted) { camera_muted = muted; }
     void vibrate(uint16_t,uint8_t=100){++vibration_count;}
     void stopVibrate(){}
-    void audioPlay(std::vector<int16_t>&,bool=true){}
+    void audioPlay(std::vector<int16_t>,bool=true){}
     struct ImuData {float accelX=0,accelY=0,accelZ=1;};
     ImuData imu;
     void updateImuData(){}
@@ -61,7 +63,8 @@ struct Hal {
     WifiStatus getWifiStatus() { return network; }
     int brightness=65;
     int getBackLightBrightness() { return brightness; }
-    int getSpeakerVolume() { return 40; }
+    int speaker_volume = 40;
+    int getSpeakerVolume() { return speaker_volume; }
 };
 Hal& GetHAL();
 struct LvglLockGuard {};

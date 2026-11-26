@@ -82,6 +82,7 @@ public:
 
     void set_enabled(bool enabled, bool save_to_settings)
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         if (save_to_settings) {
             Settings settings(_settings_namespace, true);
             settings.SetBool(_wifi_enabled_key, enabled);
@@ -92,6 +93,7 @@ public:
             _wifi_enabled              = enabled;
             _status.enabled            = enabled;
             _restart_station_requested = false;
+            if (_camera_active) return;
         }
 
         if (enabled) {
@@ -136,8 +138,9 @@ public:
 
     void enter_config()
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         { std::lock_guard<std::recursive_mutex> lock(_mutex);
-          if (_badge_active) return;
+          if (_badge_active || _camera_active) return;
           _wifi_enabled = true;
           _status.enabled = true;
           _restart_station_requested = false; }
@@ -148,6 +151,8 @@ public:
 
     void exit_config()
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
+        { std::lock_guard<std::recursive_mutex> lock(_mutex); if (_camera_active) return; }
         if (has_saved_credentials()) {
             start_station_or_config_ap("Connecting");
         } else {
@@ -155,10 +160,12 @@ public:
         }
     }
 
-    void enter_badge_ap()
+    bool enter_badge_ap()
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
+            if (_camera_active) return false;
             _badge_active              = true;
             _restart_station_requested = false;
         }
@@ -177,10 +184,12 @@ public:
         _status.apSsid.clear();
         _status.apUrl        = "http://192.168.4.1";
         _status.message      = "Badge edit AP";
+        return true;
     }
 
     void exit_badge_ap()
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         bool should_resume_wifi = false;
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
@@ -194,6 +203,38 @@ public:
         } else {
             set_off_status("Wi-Fi off");
         }
+    }
+
+    bool acquire_camera()
+    {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
+        if (!ensure_initialized()) return false;
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            if (_badge_active || _camera_active) return false;
+            _camera_active = true;
+            _resume_config = _status.mode == Hal::WifiMode::ConfigAp;
+            _restart_station_requested = false;
+        }
+        stop_wifi_owner();
+        set_off_status("Camera Wi-Fi");
+        return true;
+    }
+
+    void release_camera()
+    {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
+        bool enabled, config;
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            if (!_camera_active) return;
+            _camera_active = false;
+            enabled = _wifi_enabled;
+            config = _resume_config;
+        }
+        if (!enabled) set_off_status("Wi-Fi off");
+        else if (config) start_config_ap("Setup AP");
+        else start_station_or_config_ap("Resuming Wi-Fi");
     }
 
 private:
@@ -242,6 +283,7 @@ private:
 
     void start_station_or_config_ap(const std::string& message)
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         if (!ensure_initialized()) {
             return;
         }
@@ -253,7 +295,7 @@ private:
 
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
-            if (_badge_active || !_wifi_enabled) {
+            if (_badge_active || _camera_active || !_wifi_enabled) {
                 return;
             }
         }
@@ -281,13 +323,14 @@ private:
 
     void start_config_ap(const std::string& reason)
     {
+        std::lock_guard<std::recursive_mutex> transition(_transition);
         if (!ensure_initialized()) {
             return;
         }
 
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
-            if (_badge_active || !_wifi_enabled) {
+            if (_badge_active || _camera_active || !_wifi_enabled) {
                 return;
             }
         }
@@ -340,7 +383,7 @@ private:
     void handle_event(WifiEvent event, const std::string& data)
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (_badge_active) {
+        if (_badge_active || _camera_active) {
             return;
         }
 
@@ -406,7 +449,9 @@ private:
         return instance;
     }
 
-    std::recursive_mutex _mutex;
+    std::recursive_mutex _mutex, _transition;
+    bool _camera_active = false;
+    bool _resume_config = false;
     bool _initialized                = false;
     bool _wifi_enabled               = false;
     bool _badge_active               = false;
@@ -449,9 +494,9 @@ Hal::WifiStatus Hal::getWifiStatus()
     return get_network_controller().status();
 }
 
-void Hal::wifi_enter_badge_ap()
+bool Hal::wifi_enter_badge_ap()
 {
-    get_network_controller().enter_badge_ap();
+    return get_network_controller().enter_badge_ap();
 }
 
 void Hal::wifi_exit_badge_ap()
@@ -461,3 +506,5 @@ void Hal::wifi_exit_badge_ap()
 
 void Hal::startWifiProvisioning() { get_network_controller().enter_config(); }
 void Hal::stopWifiProvisioning() { get_network_controller().exit_config(); }
+bool Hal::acquireCameraWifi() { return get_network_controller().acquire_camera(); }
+void Hal::releaseCameraWifi() { get_network_controller().release_camera(); }

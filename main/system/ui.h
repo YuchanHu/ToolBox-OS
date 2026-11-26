@@ -6,9 +6,26 @@
 namespace toolbox::ui {
 constexpr uint32_t accent = 0x9dc6ff;
 constexpr int content_top = 144;
+constexpr int screen_diameter = 466;
+constexpr int menu_width = 328;
+constexpr int menu_height = 62;
+constexpr int menu_pitch = 70;
+constexpr int menu_x = (screen_diameter - menu_width) / 2;
+constexpr int menu_radius = 24;
+constexpr uint32_t menu_color = 0x181d25;
+
+struct MenuRow {
+    lv_obj_t* object;
+    lv_obj_t* value;
+};
+
 lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, uint32_t color = 0, int radius = 0);
+lv_obj_t* round_page(lv_obj_t* parent);
 lv_obj_t* scroll_panel(lv_obj_t* parent, int x, int y, int width, int height,
                        uint32_t color = 0, int radius = 0);
+lv_obj_t* menu_list(lv_obj_t* parent, int y = content_top, int height = 264);
+MenuRow menu_row(lv_obj_t* parent, const char* caption, int x, int y, const char* value = nullptr,
+                 const lv_image_dsc_t* leading = nullptr, bool chevron = false);
 void cache_scroll_rows(lv_obj_t* viewport);
 lv_obj_t* text(lv_obj_t* parent, const char* value, int x, int y, int width,
                const lv_font_t* font = &toolbox_misans_28, uint32_t color = 0xf3f6fc);

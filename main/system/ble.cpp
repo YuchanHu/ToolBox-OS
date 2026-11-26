@@ -1,5 +1,6 @@
 #include "ble.h"
 #include "camera_ble.h"
+#include "lighting/radio_ble.h"
 #include <esp_bt.h>
 #include <esp_bt_main.h>
 #include <esp_gap_ble_api.h>
@@ -15,6 +16,7 @@ esp_ble_adv_params_t parameters = {};
 
 void gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* data)
 {
+    if (lighting::owns_radio()) { lighting::gap_event(event, data); return; }
     camera::gap_event(event, data);
     if (event == ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT && enabled) {
         if (data->adv_data_cmpl.status == ESP_BT_STATUS_SUCCESS) {
@@ -27,6 +29,19 @@ void gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* data)
         error = ESP_FAIL;
     }
 }
+void gatt_event(esp_gattc_cb_event_t event, esp_gatt_if_t interface, esp_ble_gattc_cb_param_t* data) {
+    // Both clients filter their GATT interface and handle completions after closing.
+    camera::gatt_event(event, interface, data);
+    lighting::gatt_event(event, interface, data);
+}
+}
+
+void resume_idle_ble_advertising() {
+    if (!enabled) return;
+    esp_ble_adv_data_t data = {};
+    data.include_name = true;
+    data.flag = ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT;
+    esp_ble_gap_config_adv_data(&data);
 }
 
 bool ble_enabled() { return enabled.load(); }
@@ -37,6 +52,7 @@ esp_err_t set_ble_enabled(bool target)
     // Runtime serializes all controller transitions on the main task.
     if (target == enabled && error == ESP_OK) return ESP_OK;
     enabled = false;
+    lighting::stack_stopping();
     camera::stack_stopping();
     if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
         esp_ble_gap_stop_advertising();
@@ -80,7 +96,11 @@ esp_err_t set_ble_enabled(bool target)
     if (error != ESP_OK) return error;
     error = esp_ble_gap_register_callback(gap_event);
     if (error != ESP_OK) return error;
+    error = esp_ble_gattc_register_callback(gatt_event);
+    if (error != ESP_OK) return error;
     error = camera::stack_started();
+    if (error != ESP_OK) return error;
+    error = lighting::stack_started();
     if (error != ESP_OK) return error;
     error = esp_ble_gap_set_device_name("ToolBox OS");
     if (error != ESP_OK) return error;

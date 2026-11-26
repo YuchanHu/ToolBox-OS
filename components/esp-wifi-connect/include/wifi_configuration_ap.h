@@ -2,6 +2,7 @@
 #define _WIFI_CONFIGURATION_AP_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <mutex>
 #include <memory>
@@ -36,6 +37,7 @@ public:
     void SetLanguage(const std::string &&language);
     void SetLanguage(const std::string &language);
     void Start();
+    bool StartCustom(const char* html, std::function<bool(std::string_view)> submit);
     void Stop();
 #if !CONFIG_IDF_TARGET_ESP32P4
     void StartSmartConfig();
@@ -75,7 +77,9 @@ private:
     // Callbacks
     std::function<void()> on_exit_requested_;
 
-    void StartAccessPoint();
+    void StartAccessPoint(bool custom = false);
+    const char* custom_html_ = nullptr;
+    std::function<bool(std::string_view)> custom_submit_;
     void StartWebServer();
 
     // Event handlers

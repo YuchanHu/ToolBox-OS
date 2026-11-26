@@ -47,7 +47,11 @@ class WeatherService {
     struct Request;
     WeatherResult result_;
     std::shared_ptr<Request> request_;
+    int cache_slot_ = -1;
+    uint32_t cache_sequence_ = 0;
+    bool cache_in_nvs_ = false;
     void launch(const std::string &query, const WeatherCity &city);
     void start_pending();
+    void save_cache(const std::string& data);
 };
 } // namespace toolbox

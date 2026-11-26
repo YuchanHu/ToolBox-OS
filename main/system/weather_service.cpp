@@ -1,12 +1,14 @@
 #include "weather_service.h"
 #include "weather_decode.h"
 #include <cJSON.h>
+#include <esp_crc.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
+#include <hal/utils/wear_levelling/wear_levelling.h>
 
 #include <algorithm>
 #include <atomic>
@@ -16,12 +18,14 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <memory>
+#include <unistd.h>
 
 namespace toolbox {
 namespace {
 using Json = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+constexpr size_t cache_limit = 3500;
 Json parse(const std::string &s) {
-    return Json(cJSON_Parse(s.c_str()), cJSON_Delete);
+    return Json(cJSON_ParseWithOpts(s.c_str(), nullptr, true), cJSON_Delete);
 }
 cJSON *field(cJSON *p, const char *k) {
     return cJSON_GetObjectItemCaseSensitive(p, k);
@@ -63,31 +67,103 @@ WeatherCity query_city(const std::string &value) {
 std::string query_key(const WeatherCity &city) {
     return city.mode + ":" + city.input;
 }
-std::string compact_cache(cJSON *response, const WeatherCity &city) {
-    // The offline snapshot keeps daily forecasts and a compact subset of hourly fields.
-    auto *hours = cJSON_AddArrayToObject(response, "hours");
-    cJSON *h;
-    cJSON_ArrayForEach(h, field(response, "hourly_forecast")) {
-        if (cJSON_GetArraySize(hours) >= 24) break;
+std::string compact_cache(cJSON* response, const WeatherResult& weather, const WeatherCity& city)
+{
+    Json cache(cJSON_CreateObject(), cJSON_Delete);
+    for (auto key : {"city", "report_time", "temperature", "weather", "weather_icon", "temp_min", "temp_max",
+                     "humidity", "wind_direction", "wind_power", "wind_speed", "precipitation", "uv",
+                     "feels_like", "visibility", "pressure", "cloud", "aqi", "aqi_category", "air_pollutants", "alerts"}) {
+        if (auto* value = field(response, key)) cJSON_AddItemToObject(cache.get(), key, cJSON_Duplicate(value, true));
+    }
+    auto* days = cJSON_AddArrayToObject(cache.get(), "forecast");
+    const auto today = weather.forecast->days.front().date;
+    for (const auto& d : weather.forecast->days) {
+        if (d.high.empty() || d.low.empty()) continue;
+        auto* row = cJSON_CreateObject();
+        cJSON_AddStringToObject(row, "date", d.date.c_str());
+        cJSON_AddStringToObject(row, "temp_min", d.low.c_str());
+        cJSON_AddStringToObject(row, "temp_max", d.high.c_str());
+        auto add = [&](const char* key, const std::string& value) {
+            if (!value.empty()) cJSON_AddStringToObject(row, key, value.c_str());
+        };
+        add("week", d.week);
+        add("weather_day", d.day_condition);
+        add("weather_night", d.night_condition);
+        add("sunrise", d.sunrise);
+        add("sunset", d.sunset);
+        if (d.date != today) {
+            add("humidity", d.humidity);
+            add("wind_dir_day", d.direction);
+            add("wind_scale_day", d.power);
+            add("wind_speed_day", d.wind);
+            add("precip", d.precipitation);
+            add("uv_index", d.uv);
+        }
+        cJSON_AddItemToArray(days, row);
+    }
+    auto* hours = cJSON_AddArrayToObject(cache.get(), "hours");
+    for (const auto& h : weather.forecast->hours) {
         auto *row = cJSON_CreateArray();
-        for (auto key : {"time", "temperature", "pop", "precip"})
-            cJSON_AddItemToArray(row, cJSON_CreateString(str(h, key).c_str()));
+        for (const auto* value : {&h.time, &h.temperature, &h.pop, &h.precip})
+            cJSON_AddItemToArray(row, cJSON_CreateString(value->c_str()));
         cJSON_AddItemToArray(hours, row);
     }
-    cJSON_DeleteItemFromObject(response, "hourly_forecast");
-    cJSON_AddStringToObject(response, "query", query_key(city).c_str());
-    cJSON_AddNumberToObject(response, "saved", std::time(nullptr));
-    char *serialized = cJSON_PrintUnformatted(response);
-    std::string cache = serialized ? serialized : "";
-    cJSON_free(serialized);
-    if (cache.size() > 3500) {
-        cJSON_DeleteItemFromObject(response, "hours");
-        serialized = cJSON_PrintUnformatted(response);
-        cache = serialized ? serialized : "";
-        cJSON_free(serialized);
+    cJSON_AddStringToObject(cache.get(), "query", query_key(city).c_str());
+    cJSON_AddNumberToObject(cache.get(), "saved", weather.fetched_at);
+    auto serialize = [&] {
+        std::unique_ptr<char, decltype(&cJSON_free)> json(cJSON_PrintUnformatted(cache.get()), cJSON_free);
+        return json ? std::string(json.get()) : std::string{};
+    };
+    auto data = serialize();
+    if (data.size() > cache_limit) {
+        cJSON_DeleteItemFromObject(cache.get(), "hours");
+        data = serialize();
     }
-    return cache.size() <= 3500 ? cache : std::string{};
+    return data.size() <= cache_limit ? std::move(data) : std::string{};
 }
+
+std::string cache_path(int slot)
+{
+    return std::string(wear_levelling_get_base_path()) + (slot == 0 ? "/weather.0" : "/weather.1");
+}
+
+struct CacheHeader {
+    uint32_t sequence, size, crc;
+};
+
+uint32_t cache_crc(const std::string& data)
+{
+    return esp_crc32_le(0, reinterpret_cast<const uint8_t*>(data.data()), data.size());
+}
+
+std::string read_cache(int slot, uint32_t& sequence)
+{
+    const auto file = std::unique_ptr<FILE, decltype(&fclose)>(fopen(cache_path(slot).c_str(), "rb"), fclose);
+    CacheHeader header;
+    if (!file || fread(&header, sizeof(header), 1, file.get()) != 1 || !header.sequence ||
+        !header.size || header.size > cache_limit) return {};
+    std::string data(header.size, '\0');
+    if (fread(data.data(), 1, data.size(), file.get()) != data.size() || cache_crc(data) != header.crc) return {};
+    sequence = header.sequence;
+    return data;
+}
+
+bool write_cache(int slot, uint32_t sequence, const std::string& data)
+{
+    auto* file = fopen(cache_path(slot).c_str(), "wb");
+    if (!file) return false;
+    const CacheHeader header{sequence, static_cast<uint32_t>(data.size()), cache_crc(data)};
+    const bool written = fwrite(&header, sizeof(header), 1, file) == 1 &&
+                         fwrite(data.data(), 1, data.size(), file) == data.size() &&
+                         fflush(file) == 0 && fsync(fileno(file)) == 0;
+    return fclose(file) == 0 && written;
+}
+
+bool newer_cache(uint32_t sequence, uint32_t previous)
+{
+    return !previous || static_cast<int32_t>(sequence - previous) > 0;
+}
+
 std::atomic<bool> transport_busy{false};
 } // namespace
 
@@ -105,28 +181,30 @@ struct WeatherService::Request {
 WeatherService::WeatherService() {
     Settings settings("weather");
     const auto key = settings.GetString("query");
-    const auto legacy = parse(settings.GetString("city"));
+    const auto legacy = parse(key.empty() ? settings.GetString("city") : std::string{});
     const auto old_id = str(legacy.get(), "id");
     result_.city = query_city(key.empty() && !old_id.empty() ? "adcode:" + old_id : key);
     result_.city.name = result_.city.input;
-    auto root = parse(settings.GetString("cache"));
-    if (field(root.get(), "query")) {
-        auto *hours = cJSON_AddArrayToObject(root.get(), "hourly_forecast");
-        cJSON *row;
-        cJSON_ArrayForEach(row, field(root.get(), "hours")) {
-            auto *hour = cJSON_CreateObject();
-            int i = 0;
-            for (auto k : {"time", "temperature", "pop", "precip"}) {
-                auto *value = cJSON_GetArrayItem(row, i++);
-                if (cJSON_IsString(value)) cJSON_AddStringToObject(hour, k, value->valuestring);
-            }
-            cJSON_AddItemToArray(hours, hour);
+    const auto query = query_key(result_.city);
+    uint32_t loaded = 0;
+    for (int slot = 0; slot < 2; ++slot) {
+        uint32_t sequence = 0;
+        auto cache = parse(read_cache(slot, sequence));
+        if (!cache) continue;
+        if (newer_cache(sequence, cache_sequence_)) {
+            cache_sequence_ = sequence;
+            cache_slot_ = slot;
         }
-        const auto *saved = field(root.get(), "saved");
-        if (decode_weather(result_, root.get()) && cJSON_IsNumber(saved) &&
-            str(root.get(), "query") == query_key(result_.city))
-            result_.fetched_at = static_cast<int64_t>(saved->valuedouble);
-    } else if (key.empty() && !old_id.empty() && str(field(root.get(), "city"), "id") == old_id) {
+        if (newer_cache(sequence, loaded) && decode_cached_weather(result_, cache.get(), query)) loaded = sequence;
+    }
+    const auto legacy_cache = settings.GetString("cache");
+    cache_in_nvs_ = !legacy_cache.empty();
+    auto root = parse(legacy_cache);
+    auto fallback = result_;
+    if (decode_cached_weather(fallback, root.get(), query) && (!loaded || fallback.fetched_at > result_.fetched_at)) {
+        result_ = std::move(fallback);
+    } else if (!result_.forecast && key.empty() && !old_id.empty() &&
+               str(field(root.get(), "city"), "id") == old_id) {
         auto data = std::make_shared<Forecast>();
         cJSON *p;
         cJSON_ArrayForEach(p, field(root.get(), "days")) {
@@ -147,6 +225,30 @@ WeatherService::WeatherService() {
     result_.cached = true;
     result_.message = "离线缓存";
 }
+
+void WeatherService::save_cache(const std::string& data)
+{
+    const int slot = cache_slot_ == 0 ? 1 : 0;
+    uint32_t sequence = cache_sequence_ + 1;
+    if (!sequence) sequence = 1;
+    // An incomplete write can only invalidate the older slot. Recover the
+    // other slot by its CRC and sequence on the next start.
+    if (write_cache(slot, sequence, data)) {
+        cache_slot_ = slot;
+        cache_sequence_ = sequence;
+        if (cache_in_nvs_) {
+            Settings settings("weather", true);
+            cache_in_nvs_ = settings.TryEraseKey("cache") != ESP_OK || settings.Commit() != ESP_OK;
+        }
+        return;
+    }
+    Settings settings("weather", true);
+    auto status = settings.TrySetString("cache", data);
+    if (status == ESP_OK) status = settings.Commit();
+    if (status == ESP_OK) cache_in_nvs_ = true;
+    else ESP_LOGW("Weather", "Cache write: %s", esp_err_to_name(status));
+}
+
 WeatherService::~WeatherService() {
     if (request_) request_->cancelled.store(true, std::memory_order_release);
 }
@@ -155,11 +257,7 @@ WeatherResult WeatherService::snapshot() {
     start_pending();
     if (request_ && request_->finished.load(std::memory_order_acquire)) {
         auto request = std::move(request_);
-        if (!request->cache.empty()) {
-            Settings settings("weather", true);
-            auto status = settings.TrySetString("cache", request->cache);
-            if (status != ESP_OK) ESP_LOGW("Weather", "Cache write: %s", esp_err_to_name(status));
-        }
+        if (!request->cache.empty()) save_cache(request->cache);
         request->next.busy = false;
         request->next.revision = result_.revision + 1;
         result_ = std::move(request->next);
@@ -225,11 +323,12 @@ void WeatherService::refresh(const WeatherCity &city) {
             ++result_.revision;
             return;
         }
-        auto cached_name = result_.city.name;
         result_.city = city;
-        if (result_.forecast) result_.city.name = cached_name;
+        if (result_.city.name.empty()) result_.city.name = result_.city.input;
+        result_.forecast.reset();
         result_.cached = true;
         result_.fetched_at = 0;
+        ++result_.revision;
     }
     launch({}, city);
 }
@@ -294,7 +393,7 @@ void WeatherService::Request::run() {
         next.cached = false;
         next.fetched_at = std::time(nullptr);
         next.message = "更新完成";
-        cache = compact_cache(response.get(), selected);
+        cache = compact_cache(response.get(), next, selected);
     } else {
         next.message = next.forecast ? "请求失败，显示缓存" : "更新失败，下拉重试";
         next.cached = true;

@@ -4,6 +4,28 @@
   "static_symbols": "·：，。％°？‹›−~晴多云阴少阵雷雨夹雪冻冰雹暴大中小毛雾霾沙尘扬浮强热带极特",
   "fonts": [
     {
+      "name": "toolbox_misans_lighting_20",
+      "source": "MiSans-Regular.ttf",
+      "size": 20,
+      "bpp": 4,
+      "coverage": "static-cn",
+      "source_directories": ["main/apps/app_lighting", "main/system/lighting"],
+      "fallback": "toolbox_misans_20",
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_lighting_20.c"
+    },
+    {
+      "name": "toolbox_misans_lighting_26",
+      "source": "MiSans-Semibold.ttf",
+      "size": 26,
+      "bpp": 4,
+      "coverage": "static-cn",
+      "source_directories": ["main/apps/app_lighting", "main/system/lighting"],
+      "fallback": "toolbox_misans_26",
+      "compression": "lv_font_conv",
+      "output": "main/assets/fonts/toolbox_misans_lighting_26.c"
+    },
+    {
       "name": "toolbox_misans_18",
       "source": "MiSans-Regular.ttf",
       "size": 18,
@@ -43,9 +65,10 @@
       "weight": "Regular",
       "coverage": "static-cn",
       "bpp": 4,
+      "fallback": "toolbox_misans_20",
       "compression": "lv_font_conv",
       "output": "main/assets/fonts/toolbox_misans_23.c",
-      "use": "按钮、状态与应用交互"
+      "use": "统一菜单项、按钮和状态"
     },
     {
       "name": "toolbox_misans_24",
@@ -97,6 +120,7 @@
       "size": 32,
       "weight": "Semibold",
       "coverage": "ascii",
+      "extra_symbols": "°",
       "bpp": 4,
       "compression": "lv_font_conv",
       "output": "main/assets/fonts/toolbox_misans_32.c",

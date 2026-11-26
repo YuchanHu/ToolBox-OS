@@ -26,7 +26,6 @@ build/
 
 # ESP-IDF specific build outputs
 *.bin
-!/main/assets/sfx/boot_sfx.bin
 *.elf
 *.map
 flasher_args.json
@@ -85,3 +84,10 @@ Desktop.ini
 /build-*/
 /sdkconfig.local*
 /CMakeUserPresets.json
+
+# Local firmware packages, review captures and third-party reference archives
+/output/lighting-firmware/
+/output/list-menu-screenshots/
+/output/menu-screenshots/
+/output/sony-console-icons/
+/reference/lighting/*.zip

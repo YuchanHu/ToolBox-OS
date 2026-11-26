@@ -109,6 +109,7 @@ bool WifiManager::IsInitialized() const {
 // ==================== Station Mode ====================
 
 void WifiManager::StartStation() {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!initialized_) {
@@ -123,10 +124,11 @@ void WifiManager::StartStation() {
     // Auto-stop config AP if active
     if (config_mode_active_) {
         ESP_LOGI(TAG, "Stopping config AP before starting station");
-        config_ap_->Stop();
         config_mode_active_ = false;
+        custom_config_active_ = false;
         // Notify outside lock
         lock.unlock();
+        config_ap_->Stop();
         NotifyEvent(WifiEvent::ConfigModeExit);
         lock.lock();
     }
@@ -155,7 +157,45 @@ void WifiManager::StartStation() {
     station_active_ = true;
 }
 
+bool WifiManager::StartDirectStation(const std::string& ssid, const std::string& password) {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || station_active_ || config_mode_active_) return false;
+    if (!station_->StartDirect(ssid, password)) {
+        station_->Stop();
+        return false;
+    }
+    station_active_ = true;
+    return true;
+}
+
+bool WifiManager::WaitForStation(int timeoutMs) {
+    WifiStation* station;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!station_active_) return false;
+        station = station_.get(); // owned for the lifetime of the initialized manager
+    }
+    return station->WaitForConnected(timeoutMs);
+}
+
+std::vector<wifi_ap_record_t> WifiManager::ScanNearby() {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || station_active_ || config_mode_active_) return {};
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK || esp_wifi_start() != ESP_OK) return {};
+    wifi_scan_config_t config{};
+    config.scan_time.active.max = 120;
+    wifi_ap_record_t records[24]{};
+    uint16_t count = 24;
+    if (esp_wifi_scan_start(&config, true) != ESP_OK ||
+        esp_wifi_scan_get_ap_records(&count, records) != ESP_OK) count = 0;
+    esp_wifi_stop();
+    return {records, records + count};
+}
+
 void WifiManager::StopStation() {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!station_active_) {
@@ -163,13 +203,11 @@ void WifiManager::StopStation() {
     }
 
     ESP_LOGI(TAG, "Stopping station");
+    station_active_ = false;
+    lock.unlock();
     station_->Stop();
     ESP_LOGI(TAG, "Station stopped");
-    station_active_ = false;
-
-    lock.unlock();
     NotifyEvent(WifiEvent::Disconnected);
-    lock.lock();
 }
 
 bool WifiManager::IsConnected() const {
@@ -219,7 +257,19 @@ std::string WifiManager::GetMacAddress() const {
 
 // ==================== Config AP Mode ====================
 
+bool WifiManager::StartCustomConfigAp(const std::string& prefix, const char* html,
+                                     std::function<bool(std::string_view)> submit) {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || station_active_ || config_mode_active_) return false;
+    config_ap_->SetSsidPrefix(prefix);
+    config_mode_active_ = config_ap_->StartCustom(html, std::move(submit));
+    custom_config_active_ = config_mode_active_;
+    return config_mode_active_;
+}
+
 void WifiManager::StartConfigAp() {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!initialized_) {
@@ -234,9 +284,9 @@ void WifiManager::StartConfigAp() {
     // Auto-stop station if active
     if (station_active_) {
         ESP_LOGI(TAG, "Stopping station before starting config AP");
-        station_->Stop();
         station_active_ = false;
         lock.unlock();
+        station_->Stop();
         NotifyEvent(WifiEvent::Disconnected);
         lock.lock();
     }
@@ -248,6 +298,8 @@ void WifiManager::StartConfigAp() {
 
     // Web handler calls this when user submits config
     config_ap_->OnExitRequested([this]() {
+        std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
+        if (custom_config_active_) return;
         ESP_LOGI(TAG, "Config exit requested from web");
         StopConfigAp();
     });
@@ -261,6 +313,7 @@ void WifiManager::StartConfigAp() {
 }
 
 void WifiManager::StopConfigAp() {
+    std::lock_guard<std::recursive_mutex> radio(radio_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!config_mode_active_) {
@@ -268,12 +321,12 @@ void WifiManager::StopConfigAp() {
     }
 
     ESP_LOGI(TAG, "Stopping config AP");
-    config_ap_->Stop();
     config_mode_active_ = false;
+    custom_config_active_ = false;
 
     lock.unlock();
+    config_ap_->Stop();
     NotifyEvent(WifiEvent::ConfigModeExit);
-    lock.lock();
 }
 
 bool WifiManager::IsConfigMode() const {

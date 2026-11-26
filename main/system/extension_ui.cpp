@@ -30,10 +30,44 @@ std::string number(double value) {
     snprintf(text, sizeof(text), "%05.2f", value);
     return text;
 }
+
+bool level_on_target(const ExtensionViewState& state)
+{
+    return state.valid && state.error <= state.tolerance;
+}
+
+int level_arrow_step(double direction)
+{
+    return std::lround(direction * 4);
+}
+
+std::array<lv_point_precise_t, 3> level_arrow(const lv_area_t& area, int step)
+{
+    const double angle = step * (.017453293 / 4);
+    const double x = area.x1 + 233 + 146 * std::cos(angle);
+    const double y = area.y1 + 233 + 146 * std::sin(angle);
+    auto point = [](double x, double y) {
+        return lv_point_precise_t{static_cast<lv_value_precise_t>(x), static_cast<lv_value_precise_t>(y)};
+    };
+    return {point(x, y), point(x - 20 * std::cos(angle - .5), y - 20 * std::sin(angle - .5)),
+            point(x - 20 * std::cos(angle + .5), y - 20 * std::sin(angle + .5))};
+}
+
+void invalidate_level_arrow(lv_obj_t* object, const lv_area_t& area, int step)
+{
+    const auto points = level_arrow(area, step);
+    const lv_area_t dirty{
+        static_cast<int>(std::floor(std::min({points[0].x, points[1].x, points[2].x}))) - 2,
+        static_cast<int>(std::floor(std::min({points[0].y, points[1].y, points[2].y}))) - 2,
+        static_cast<int>(std::ceil(std::max({points[0].x, points[1].x, points[2].x}))) + 2,
+        static_cast<int>(std::ceil(std::max({points[0].y, points[1].y, points[2].y}))) + 2,
+    };
+    lv_obj_invalidate_area(object, &dirty);
+}
 } // namespace
 
 ExtensionView::ExtensionView(Extension kind) : kind_(kind) {
-    root_ = ui::panel(lv_screen_active(), 1, 0, 466, 466);
+    root_ = ui::round_page(lv_screen_active());
     lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(root_, event, LV_EVENT_CLICKED, this);
     if (kind_ == Extension::Weather) {
@@ -55,9 +89,13 @@ lv_obj_t *ExtensionView::button(lv_obj_t *parent, const char *caption, int x, in
     auto *object =
         ui::button(parent, caption, x, y, width, height, [](lv_event_t *) {}, accent ? ui::accent : 0x202631,
                    kind_ == Extension::Weather ? &toolbox_misans_20 : &toolbox_misans_23);
+    bind_action(object, action, value);
+    return object;
+}
+
+void ExtensionView::bind_action(lv_obj_t* object, ExtensionAction action, int value) {
     lv_obj_set_user_data(object, reinterpret_cast<void *>((static_cast<uintptr_t>(action) << 16) | (value & 0xffff)));
     lv_obj_add_event_cb(object, event, LV_EVENT_CLICKED, this);
-    return object;
 }
 void ExtensionView::event(lv_event_t *event) {
     auto *self = static_cast<ExtensionView *>(lv_event_get_user_data(event));
@@ -216,9 +254,10 @@ void ExtensionView::build() {
         button(content_, "常用时长", 69, 372, 157, 48, ExtensionAction::Preset, 0);
         button(content_, "自定义", 240, 372, 157, 48, ExtensionAction::Custom, 0, true);
     } else if (state_.page == ExtensionPage::Custom) {
-        ui::text(content_, "时          分          秒", 0, 149, 466, &toolbox_misans_20, 0x98a4b7);
+        const char* units[] = {"时", "分", "秒"};
         for (int i = 0; i < 3; ++i) {
             const int x = 77 + 108 * i;
+            ui::text(content_, units[i], x, 149, 96, &toolbox_misans_20, 0x98a4b7);
             button(content_, "+", x, 186, 96, 40, ExtensionAction::Plus, i);
             values_.push_back(ui::text(content_, "00", x, 247, 96, &toolbox_misans_36));
             button(content_, "−", x, 306, 96, 40, ExtensionAction::Minus, i);
@@ -428,19 +467,16 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
         const bool clear = day.code == 100 || day.code == 150;
         const unsigned interval = day.night && clear ? 100 : 33;
         if (drawing_ && day.valid && (day.night || !clear) && now - frame_at_ >= interval) {
-            frame_at_ = now;
+            frame_at_ = now - (now - frame_at_) % interval;
             lv_obj_invalidate(drawing_);
         }
         return;
     }
-    const auto level_on_target = [](const ExtensionViewState& value) {
-        return value.valid && value.error <= value.tolerance;
-    };
-    const auto arrow_step = [](double direction) { return std::lround(direction * 4); };
     const bool refresh_level = !built_ || state.page != state_.page || state.pin != state_.pin || state.valid != state_.valid;
     const bool level_changed = kind_ == Extension::Level && (refresh_level ||
-        level_on_target(state) != level_on_target(state_) ||
-        (state.valid && !level_on_target(state) && arrow_step(state.direction) != arrow_step(state_.direction)));
+        level_on_target(state) != level_on_target(state_));
+    const int previous_arrow = level_arrow_step(state_.direction);
+    const int next_arrow = level_arrow_step(state.direction);
     if (kind_ == Extension::Level && state.valid) {
         const double readings[] = {state.angle, state.x, state.y};
         for (unsigned i = 0; i < level_display_.size(); ++i) {
@@ -569,10 +605,12 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
                 lv_obj_remove_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(keyboard_, LV_OBJ_FLAG_HIDDEN);
-                results_ = ui::scroll_panel(content_, 69, 300, 328, 120);
+                results_ = ui::menu_list(content_, 300, 120);
                 auto *list = results_;
-                for (size_t i = 0; i < state.weather.cities.size(); ++i)
-                    button(list, state.weather.cities[i].name.c_str(), 0, i * 55, 328, 50, ExtensionAction::City, i);
+                for (size_t i = 0; i < state.weather.cities.size(); ++i) {
+                    auto* city = ui::menu_row(list, state.weather.cities[i].name.c_str(), 0, i * ui::menu_pitch).object;
+                    bind_action(city, ExtensionAction::City, i);
+                }
                 ui::cache_scroll_rows(list);
             }
         }
@@ -612,6 +650,12 @@ void ExtensionView::update(const ExtensionViewState &state, uint32_t now) {
     if (drawing_ && (level_changed || (kind_ == Extension::Weather && weather_changed))) {
         frame_at_ = now;
         lv_obj_invalidate(drawing_);
+    } else if (drawing_ && kind_ == Extension::Level && state.valid && !level_on_target(state) &&
+               previous_arrow != next_arrow) {
+        lv_area_t area;
+        lv_obj_get_coords(drawing_, &area);
+        invalidate_level_arrow(drawing_, area, previous_arrow);
+        invalidate_level_arrow(drawing_, area, next_arrow);
     }
 }
 
@@ -639,44 +683,45 @@ void ExtensionView::draw(lv_event_t *event) {
         lv_draw_line(layer, &desc);
     };
     const auto &state = self->state_;
-    const double t = lv_tick_get() / 1000.;
     if (self->kind_ == Extension::Level) {
         const uint32_t bg =
-            state.valid && state.error <= state.tolerance ? (state.pin ? 0x185fc8 : 0x168e49) : 0x050505;
+            level_on_target(state) ? (state.pin ? 0x185fc8 : 0x168e49) : 0x050505;
         rect(0, 0, 466, 466, bg, 233);
-        for (int angle = 0; angle < 360; angle += 5) {
-            const double a = angle * .017453293;
-            const int r = angle % 30 ? 205 : 199;
-            line(233 + r * cos(a), 233 + r * sin(a), 233 + 214 * cos(a), 233 + 214 * sin(a), 0xaab5ba, 2);
+        const auto& clip = layer->_clip_area;
+        const lv_point_t center{area.x1 + 233, area.y1 + 233};
+        const int dx = std::max(std::abs(clip.x1 - center.x), std::abs(clip.x2 - center.x));
+        const int dy = std::max(std::abs(clip.y1 - center.y), std::abs(clip.y2 - center.y));
+        // The directional marker moves inside the static ring.
+        if (dx * dx + dy * dy >= 163 * 163) {
+            for (int angle = 0; angle < 360; angle += 5) {
+                const double a = angle * .017453293;
+                const int r = angle % 30 ? 205 : 199;
+                line(233 + r * cos(a), 233 + r * sin(a), 233 + 214 * cos(a), 233 + 214 * sin(a), 0xaab5ba, 2);
+            }
+            lv_draw_arc_dsc_t arc;
+            lv_draw_arc_dsc_init(&arc);
+            arc.color = lv_color_white();
+            arc.width = 7;
+            arc.radius = 171;
+            arc.center = center;
+            arc.start_angle = 205;
+            arc.end_angle = 335;
+            lv_draw_arc(layer, &arc);
+            arc.start_angle = 25;
+            arc.end_angle = 155;
+            lv_draw_arc(layer, &arc);
         }
-        lv_draw_arc_dsc_t arc;
-        lv_draw_arc_dsc_init(&arc);
-        arc.color = lv_color_white();
-        arc.width = 7;
-        arc.radius = 171;
-        arc.center = {area.x1 + 233, area.y1 + 233};
-        arc.start_angle = 205;
-        arc.end_angle = 335;
-        lv_draw_arc(layer, &arc);
-        arc.start_angle = 25;
-        arc.end_angle = 155;
-        lv_draw_arc(layer, &arc);
-        if (state.valid && state.error > state.tolerance) {
-            const double a = state.direction * .017453293;
-            const double x = 233 + 146 * cos(a), y = 233 + 146 * sin(a);
+        if (state.valid && !level_on_target(state)) {
+            const auto points = level_arrow(area, level_arrow_step(state.direction));
             lv_draw_triangle_dsc_t triangle;
             lv_draw_triangle_dsc_init(&triangle);
             triangle.color = lv_color_white();
-            triangle.p[0] = {static_cast<lv_value_precise_t>(area.x1 + x),
-                             static_cast<lv_value_precise_t>(area.y1 + y)};
-            triangle.p[1] = {static_cast<lv_value_precise_t>(area.x1 + x - 20 * cos(a - .5)),
-                             static_cast<lv_value_precise_t>(area.y1 + y - 20 * sin(a - .5))};
-            triangle.p[2] = {static_cast<lv_value_precise_t>(area.x1 + x - 20 * cos(a + .5)),
-                             static_cast<lv_value_precise_t>(area.y1 + y - 20 * sin(a + .5))};
+            std::copy(points.begin(), points.end(), triangle.p);
             lv_draw_triangle(layer, &triangle);
         }
         return;
     }
+    const double t = lv_tick_get() / 1000.;
     const auto &day = state.weather.day(state.day);
     if (!day.valid) {
         rect(0, 0, 466, 466, 0, 0);

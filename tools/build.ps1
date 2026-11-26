@@ -1,6 +1,7 @@
 param(
     [string]$BuildDirectory = 'build-toolbox',
-    [string]$IdfPath = $env:IDF_PATH
+    [string]$IdfPath = $env:IDF_PATH,
+    [switch]$SonyCameraProbe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +22,8 @@ if (!(Test-Path -LiteralPath $idfPython -PathType Leaf)) {
 }
 Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
-    & $idfPython (Join-Path $IdfPath 'tools/idf.py') -B $BuildDirectory build
+    $probeOption = if ($SonyCameraProbe) { 'ON' } else { 'OFF' }
+    & $idfPython (Join-Path $IdfPath 'tools/idf.py') -B $BuildDirectory -D "TOOLBOX_SONY_PROBE=$probeOption" build
     if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)" }
 } finally {
     Pop-Location

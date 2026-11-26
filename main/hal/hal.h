@@ -8,6 +8,7 @@
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <lvgl.h>
@@ -110,7 +111,7 @@ public:
     /* --------------------------------- System --------------------------------- */
     void delay(std::uint32_t ms);
     std::uint32_t millis();
-    void feedTheDog();
+    void updateServices();
     std::array<uint8_t, 6> getFactoryMac();
     std::string getFactoryMacString(std::string divider = "");
     void reboot();
@@ -151,9 +152,8 @@ public:
     int getSpeakerVolume(bool loadFromSettings = false);
     int getAudioSampleRate();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
-    void audioPlay(std::vector<int16_t>& data, bool async = true);
-
-    void playBootSfx();
+    void audioPlay(std::vector<int16_t> data, bool async = true);
+    void setCameraRecordingMute(bool muted);
 
     /* ----------------------------- Vibrator Motor ----------------------------- */
     void vibrate(uint16_t durationMs, uint8_t strength = 100);
@@ -233,6 +233,8 @@ public:
     WifiStatus getWifiStatus();
     void startWifiProvisioning();
     void stopWifiProvisioning();
+    bool acquireCameraWifi();
+    void releaseCameraWifi();
 
     /* ---------------------------------- Badge --------------------------------- */
     bool loadBadgeImage(lv_obj_t* image);
@@ -249,11 +251,10 @@ private:
     i2c_bus_handle_t _i2c_bus = nullptr;
     ImuData _imu_data;
     ButtonConfig _btn_config;
-    int _bl_brightness = 80;
-    int _spk_volume    = 80;
+    std::atomic<int> _bl_brightness{80};
+    std::atomic<int> _spk_volume{80};
 
     void i2c_init();
-    void i2c_detect();
     void pmic_init();
     bool pmic_get_pwr_btn_state();
     void ioe_init();
@@ -270,7 +271,7 @@ private:
     void fs_init();
     void wifi_init();
     void wifi_tick();
-    void wifi_enter_badge_ap();
+    bool wifi_enter_badge_ap();
     void wifi_exit_badge_ap();
 };
 

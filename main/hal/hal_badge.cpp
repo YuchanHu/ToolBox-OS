@@ -498,7 +498,10 @@ void Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
         return;
     }
 
-    wifi_enter_badge_ap();
+    if (!wifi_enter_badge_ap()) {
+        if (onLog) onLog("Wi-Fi is still in use");
+        return;
+    }
     badge::config_ap::run(onLog, {
                                      .onUpload    = save_badge_upload,
                                      .onGetState  = make_badge_state,

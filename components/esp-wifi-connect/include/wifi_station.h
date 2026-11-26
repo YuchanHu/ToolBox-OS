@@ -42,6 +42,8 @@ public:
 
     void AddAuth(const std::string &&ssid, const std::string &&password);
     void Start();
+    // Exclusive caller, transient credentials, no saved-network fallback.
+    bool StartDirect(const std::string& ssid, const std::string& password);
     void Stop();
     bool IsConnected();
     bool WaitForConnected(int timeout_ms = 10000);
@@ -58,6 +60,8 @@ public:
     void SetScanIntervalRange(int min_interval_seconds, int max_interval_seconds);
 
 private:
+    esp_err_t StartInterface(wifi_config_t* direct);
+    bool direct_ = false;
     EventGroupHandle_t event_group_;
     esp_timer_handle_t timer_handle_ = nullptr;
     esp_event_handler_instance_t instance_any_id_ = nullptr;

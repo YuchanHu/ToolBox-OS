@@ -59,7 +59,6 @@ void Hal::ioe_init()
     mclog::tagInfo(_tag, "init success, addr: 0x{:02X}", selected_addr);
 
     _ioe->setI2cSleepTime(0);
-    _ioe->setI2cSleepTime(0);
 
     _ioe->pinMode(PY32_MOTOR_EN_PIN, OUTPUT);
     _ioe->pinMode(PY32_L3B_EN_PIN, OUTPUT);
@@ -97,6 +96,7 @@ void Hal::ioe_init()
 
 void Hal::ioe_tp_reset()
 {
+    if (!_ioe) return;
     mclog::tagInfo(_tag, "touchpad reset");
 
     _ioe->digitalWrite(PY32_TP_RST_PIN, 0);
@@ -107,17 +107,9 @@ void Hal::ioe_tp_reset()
 
 void Hal::ioe_speaker_enable(bool enable)
 {
-    mclog::tagInfo(_tag, "set speaker {}", enable ? "enable" : "disable");
-
-    if (enable) {
-        _ioe->digitalWrite(PY32_SPK_PA_PIN, 1);
-        gpio_set_level(SPK_PA_PIN, 1);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    } else {
-        _ioe->digitalWrite(PY32_SPK_PA_PIN, 0);
-        gpio_set_level(SPK_PA_PIN, 0);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
+    if (_ioe) _ioe->digitalWrite(PY32_SPK_PA_PIN, enable);
+    gpio_set_level(SPK_PA_PIN, enable);
+    if (enable) delay(10);
 }
 
 /* -------------------------------------------------------------------------- */

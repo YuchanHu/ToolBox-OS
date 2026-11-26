@@ -60,7 +60,9 @@ void Runtime::update()
         brightness.save = volume.save = false;
     };
     Command command;
-    for (int count = 0; count < 16 && xQueueReceive(commands_, &command, 0) == pdTRUE; ++count) {
+    const auto app_interval = pdMS_TO_TICKS(8);
+    for (int count = 0; count < 16 &&
+         xQueueReceive(commands_, &command, count == 0 ? app_interval : 0) == pdTRUE; ++count) {
         if (command.type == CommandType::Brightness || command.type == CommandType::Volume) {
             auto& level = command.type == CommandType::Brightness ? brightness : volume;
             if (level.save && !command.save) apply_levels();
@@ -97,7 +99,12 @@ void Runtime::update()
         }
     }
     apply_levels();
-    GetHAL().feedTheDog();
+    static uint32_t last_service_update = 0;
+    const uint32_t now = GetHAL().millis();
+    if (now - last_service_update >= 50) {
+        last_service_update = now;
+        GetHAL().updateServices();
+    }
     camera::tick();
     mooncake::GetMooncake().update();
 #ifdef CONFIG_TOOLBOX_PERF
@@ -105,7 +112,6 @@ void Runtime::update()
     perf::report(display.width() * display.height());
 #endif
     static uint32_t last_shutdown_attempt = 0;
-    const uint32_t now = GetHAL().millis();
     if (shell_power_timeout() && shell_idle_ms() >= static_cast<uint32_t>(shell_power_timeout()) * 1000 &&
         now - last_shutdown_attempt >= 5000) {
         last_shutdown_attempt = now;

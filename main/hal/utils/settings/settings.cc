@@ -135,17 +135,30 @@ esp_err_t Settings::SetBlob(const std::string& key, const void* value, size_t le
     return ret;
 }
 
+esp_err_t Settings::Commit()
+{
+    if (!nvs_handle_ || !read_write_) return ESP_ERR_INVALID_STATE;
+    const esp_err_t result = nvs_commit(nvs_handle_);
+    dirty_ = false;
+    return result;
+}
+
 void Settings::EraseKey(const std::string& key)
 {
     if (read_write_) {
-        auto ret = nvs_erase_key(nvs_handle_, key.c_str());
-        if (ret != ESP_ERR_NVS_NOT_FOUND) {
-            ESP_ERROR_CHECK(ret);
-            dirty_ = true;
-        }
+        ESP_ERROR_CHECK(TryEraseKey(key));
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }
+}
+
+esp_err_t Settings::TryEraseKey(const std::string& key)
+{
+    if (!nvs_handle_) return open_result_;
+    if (!read_write_) return ESP_ERR_INVALID_STATE;
+    const auto result = nvs_erase_key(nvs_handle_, key.c_str());
+    if (result == ESP_OK) dirty_ = true;
+    return result == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : result;
 }
 
 void Settings::EraseAll()

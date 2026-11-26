@@ -3,6 +3,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
 endif()
 file(GLOB_RECURSE MY_SRCS ${track_source_changes}
     "apps/app_camera/*.cpp"
+    "apps/app_lighting/*.cpp"
     "apps/app_counter/*.cpp"
     "apps/app_timers/*.cpp"
     "apps/app_focus/*.cpp"
@@ -19,6 +20,7 @@ file(GLOB_RECURSE MY_SRCS ${track_source_changes}
     "hal/*.cc"
     "hal/*.cpp"
     "system/*.cpp"
+    "sony/*.cpp"
 )
 
 list(APPEND MY_SRCS
@@ -28,6 +30,7 @@ list(APPEND MY_SRCS
     "assets/camera_remote_icons.c"
     "assets/boot_logo.c"
     "assets/app_icons.c"
+    "assets/lighting_icon.c"
     "assets/images/icon_indicator_left.c"
     "assets/images/icon_indicator_right.c"
     "assets/images/icon_badge.c"
@@ -43,8 +46,10 @@ idf_component_register(
         ${MY_SRCS}
     INCLUDE_DIRS 
         ${MY_INCS}
-    EMBED_FILES
-        "assets/sfx/boot_sfx.bin"
     EMBED_TXTFILES
         "hal/utils/config_ap/assets/badge_config_ap.html"
 )
+
+if(TOOLBOX_SONY_PROBE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TOOLBOX_SONY_PROBE=1)
+endif()

@@ -53,6 +53,10 @@ LV_IMAGE_DECLARE(toolbox_camera_check);
 LV_IMAGE_DECLARE(toolbox_camera_warning);
 LV_IMAGE_DECLARE(toolbox_camera_back);
 LV_IMAGE_DECLARE(toolbox_camera_right);
+LV_IMAGE_DECLARE(toolbox_camera_console_photo);
+LV_IMAGE_DECLARE(toolbox_camera_console_movie);
+LV_IMAGE_DECLARE(toolbox_camera_console_body);
+LV_IMAGE_DECLARE(toolbox_camera_console_album);
 #ifdef __cplusplus
 }
 #endif

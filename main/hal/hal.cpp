@@ -37,8 +37,8 @@ void Hal::init()
     ioe_init();
     delay(50);
     display_init();
-    touchpad_init();
     lvgl_init();
+    touchpad_init();
     audio_init();
     imu_init();
     rtc_init();
@@ -66,11 +66,10 @@ std::uint32_t Hal::millis()
     return esp_timer_get_time() / 1000;
 }
 
-void Hal::feedTheDog()
+void Hal::updateServices()
 {
     wifi_tick();
     rtc_tick();
-    vTaskDelay(1);
 }
 
 std::array<uint8_t, 6> Hal::getFactoryMac()
@@ -124,37 +123,7 @@ void Hal::i2c_init()
         .clk_flags = 0,
     };
     _i2c_bus = i2c_bus_create(I2C_NUM_0, &conf);
-
-    i2c_detect();
-}
-
-void Hal::i2c_detect()
-{
-    uint8_t address;
-    uint8_t buf[128];
-    uint8_t count = i2c_bus_scan(_i2c_bus, buf, 128);
-
-    printf("     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\r\n");
-    for (int i = 0; i < 128; i += 16) {
-        printf("%02x: ", i);
-        for (int j = 0; j < 16; j++) {
-            fflush(stdout);
-            address    = i + j;
-            bool found = false;
-            for (int k = 0; k < count; k++) {
-                if (buf[k] == address) {
-                    found = true;
-                    break;
-                }
-            }
-            if (found) {
-                printf("%02x ", address);
-            } else {
-                printf("-- ");
-            }
-        }
-        printf("\r\n");
-    }
+    ESP_ERROR_CHECK(_i2c_bus ? ESP_OK : ESP_FAIL);
 }
 
 /* -------------------------------------------------------------------------- */

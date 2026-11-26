@@ -13,6 +13,13 @@ AppCamera::AppCamera()
 
 void AppCamera::onOpen()
 {
+    sonyChord_ = false;
+    LvglLockGuard lock;
+    connect_ = std::make_unique<CameraConnectPage>();
+}
+
+void AppCamera::openBluetooth()
+{
     screen_ = CameraPage::Screen::Modes;
     stopping_movie_ = false;
     camera::start();
@@ -27,6 +34,28 @@ void AppCamera::onOpen()
 void AppCamera::onRunning()
 {
     auto& hal = GetHAL();
+    if (connect_) {
+        hal.applicationButtonFeedback = true;
+        hal.updateButtonStates();
+        const bool wasLocked = connect_->recordingLocked();
+        if ((hal.btnA.isPressed() && hal.btnB.isPressed()) ||
+            (wasLocked && hal.btnA.isPressed())) sonyChord_ = true;
+        const bool chord = sonyChord_;
+        if (hal.btnA.isReleased() && hal.btnB.isReleased()) sonyChord_ = false;
+        const auto key = keys_.update(false);
+        CameraConnectPage::Result result;
+        bool goHome;
+        {
+            LvglLockGuard lock;
+            result = connect_->update(!chord && hal.btnA.wasClicked(), !chord && hal.btnB.wasClicked(), hal.millis());
+            goHome = !wasLocked && !connect_->recordingLocked() && key == input::KeyEvent::GoHome;
+            if (result == CameraConnectPage::Result::Ble) connect_.reset();
+        }
+        if (goHome) { close(); return; }
+        if (result == CameraConnectPage::Result::Ble) openBluetooth();
+        else if (result == CameraConnectPage::Result::Exit) close();
+        return;
+    }
     hal.applicationButtonFeedback = screen_ == CameraPage::Screen::Movie;
     hal.updateButtonStates();
     if (keys_.update(false) == input::KeyEvent::GoHome) { close(); return; }
@@ -103,8 +132,10 @@ void AppCamera::onClose()
 {
     auto& hal = GetHAL();
     hal.applicationButtonFeedback = false;
-    camera::stop();
+    if (view_) camera::stop();
+    sony::Connection::instance().stop();
     LvglLockGuard lock;
     set_touch_input_blocked(hal.lvTouchpad, false);
     view_.reset();
+    connect_.reset();
 }

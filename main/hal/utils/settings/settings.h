@@ -19,6 +19,8 @@ public:
     void SetBool(const std::string& key, bool value);
     esp_err_t GetBlob(const std::string& key, void* value, size_t* length);
     esp_err_t SetBlob(const std::string& key, const void* value, size_t length);
+    esp_err_t Commit();
+    esp_err_t TryEraseKey(const std::string& key);
     void EraseKey(const std::string& key);
     void EraseAll();
 

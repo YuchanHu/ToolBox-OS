@@ -80,8 +80,10 @@ bool ToolApp::handle_input(ToolPage& page, int64_t now)
 
 bool ToolApp::view_due(int64_t now)
 {
-    if (now - updated_ < 33000) return false;
-    updated_ = now;
+    constexpr int64_t interval = 33000;
+    const auto elapsed = now - updated_;
+    if (elapsed < interval) return false;
+    updated_ = now - elapsed % interval;
     return true;
 }
 

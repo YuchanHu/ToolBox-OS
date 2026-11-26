@@ -85,6 +85,7 @@ class ExtensionView {
     static void draw(lv_event_t *event);
     void build();
     void confirmation();
+    void bind_action(lv_obj_t* object, ExtensionAction action, int value);
     lv_obj_t *button(lv_obj_t *parent, const char *caption, int x, int y, int width, int height, ExtensionAction action,
                      int value = 0, bool accent = false);
 };
