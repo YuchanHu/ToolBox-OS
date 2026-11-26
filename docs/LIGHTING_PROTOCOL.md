@@ -1,6 +1,6 @@
 # 多品牌灯光控制 · 首版验收
 
-本分支以 Multi-brand-light-link v1.0.20 Android APK 为互操作参考，对 APK 内的灯具通信模块及 Android GATT / Mesh 桥接进行静态分析，在 ToolBox OS / ESP-IDF 5.5.5 中重新实现前台灯控。未将 APK 或反编译代码加入仓库；尚未连接任何实体灯具。
+本分支以 Multi-brand-light-link v1.0.20 Android APK 为互操作参考，对 APK 内的灯具通信模块及 Android GATT / Mesh 桥接进行静态分析，在 ToolBox OS / ESP-IDF 5.5.5 中重新实现前台灯控。未将 APK 二进制加入仓库；反编译参考源码已单独归档于 [reference/lighting](../reference/lighting/README.md)。尚未连接任何实体灯具。
 
 ## 实现边界
 

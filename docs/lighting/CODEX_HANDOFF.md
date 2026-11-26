@@ -8,6 +8,7 @@
 
 - `docs/LIGHTING_PROTOCOL.md`：本轮实现范围、品牌映射、验收步骤、刷写条件。
 - `docs/lighting/APK_ANALYSIS.md`：APK 来源、资产/原生桥接、静态证据与已知未完成项。
+- `reference/lighting/README.md`：完整反编译参考源码 ZIP、许可证与本地使用方法。先解压到 `build-lighting-reference/`，再开展协议复核。
 - `docs/lighting/BUILD_RESULT.md`：云端首版编译及离线测试结果。
 - `main/apps/app_lighting/`、`main/system/lighting/`、`tools/lighting-test/`。
 - 根目录 AGENTS.md（如存在）、README、`docs/BUILD.md`、现有相机控制 App、蓝牙生命周期和应用注册代码。
@@ -22,7 +23,7 @@
 ## 本地继续开发
 
 1. 检查本地工作树及当前 HEAD。确保现有未提交修改不丢失；把本开发分支接入用户当前工作基线，若发生与后来开发的相机、引闪等冲突，最小范围解决，不覆盖其他功能。
-2. 使用本地已有 ESP-IDF 5.5.5、VS Code 环境。APK 由用户提供或由已确认的上游公开 Release 获取；静态解包优先，必要时使用 JADX。缺少工具先明确告知用户安装需求，禁止静默安装。只分析互操作需要的协议，不提交 APK、完整反编译文件或第三方 UI 代码。
+2. 使用本地已有 ESP-IDF 5.5.5、VS Code 环境。优先直接使用 `reference/lighting/Multi-brand-light-link-1.0.20-decompiled.zip` 中已提取的静态源码；若需其他版本，APK 由用户提供或从已确认的上游公开 Release 获取，必要时使用 JADX。缺少工具先明确告知用户安装需求，禁止静默安装。只分析互操作需要的协议；不要追加 APK 二进制、重复提交解压后的源码或将第三方 Android UI 直接纳入固件。
 3. 对当前编码、设备识别、GATT 服务/特征 UUID、连接/断连、通知、写入类型、MTU、广播地址/间隔、Mesh 入网/配置/模型识别、同一控制器的多灯位隔离逐项静态核对。以 APK 事实为准；不要把所有品牌笼统当成 GATT。记录每项协议事实与对应 APK 文件、函数和证据。
 4. 补齐确有静态证据的缺项。重点是影器、永诺、爱图仕/amaran；其次金贝、神牛、印迹、南光、新摄角、轻装时代、Ulanzi、智云。南光 Feasy Mesh / Netrix 目前缺失，金贝 Pairlink 流程尚未实现。飞面/过曝不在当前 APK 的可识别协议内，需要独立 APK/协议材料后才开发，不得虚构报文。
 5. 延用原有圆形 466×466 屏幕 UI、MiSans、现有应用导航/振动反馈。优先复用相机控制类通用组件，不照搬 Android UI，不使用图片模型生成 UI；禁止无意义的小字和提示，不过度防御。提供实际 UI 渲染预览（使用本项目已有渲染方式），确保文字、布局无截断；不擅改其他 App。

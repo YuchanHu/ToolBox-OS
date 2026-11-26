@@ -1,6 +1,6 @@
 # Multi-brand-light-link APK 静态分析归档
 
-分析样本：`Multi-brand-light-link-v1.0.20.apk`，上游 [Dog-brother0113/Multi-brand-light-link](https://github.com/Dog-brother0113/Multi-brand-light-link) 的公开 Release。APK 是互操作参考，不随本仓库再次分发。JS 资产通过 ZIP 解包获取，原生 classes.dex 通过 JADX 1.5.3 检查。相关原生类位于 `com.pianchang.lighting`；JADX 总计 1838 类有 2 处反编译错误，不能因此声称所有代码完整恢复。
+分析样本：`Multi-brand-light-link-v1.0.20.apk`，上游 [Dog-brother0113/Multi-brand-light-link](https://github.com/Dog-brother0113/Multi-brand-light-link) 的公开 Release。APK 是互操作参考，不随本仓库再次分发。JS 资产通过 ZIP 解包获取，原生 classes.dex 通过 JADX 1.5.3 检查。相关原生类位于 `com.pianchang.lighting`；JADX 总计 1838 类有 2 处反编译错误，不能因此声称所有代码完整恢复。全量 Java 输出、存在不完整方法的类的 fallback 指令视图、原始 JS/HTML/CSS 和解码 XML 已归档：[reference/lighting](../../reference/lighting/README.md)。本地解压后使用其中的 assets 目录复现向量。
 
 ## 证据索引
 
